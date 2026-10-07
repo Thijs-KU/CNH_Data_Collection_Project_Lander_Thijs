@@ -1,0 +1,23 @@
+{
+  "model": "Roboflow/rf-detr-small (transformers RfDetrForObjectDetection), 6 classes, 300 queries, input resized to 512x512 by the image processor",
+  "data": "public grain detection dataset, tile-level: coco/train (1142 tiles, 19429 boxes) for training, coco/val (362 tiles, 4000 boxes) for model selection; coco/test never used for training or selection",
+  "epochs": 30,
+  "per_device_train_batch_size": 2,
+  "gradient_accumulation_steps": 8,
+  "effective_batch_size": 16,
+  "optimizer_steps": 2160,
+  "learning_rate": 1e-4,
+  "lr_scheduler": "cosine, warmup_ratio 0.05",
+  "weight_decay": 1e-4,
+  "optimizer": "adamw_torch_fused (beta 0.9/0.999, eps 1e-8)",
+  "max_grad_norm": 0.01,
+  "bf16": true,
+  "seed": 1337, "data_seed": 1337, "PYTHONHASHSEED": 1337,
+  "dataloader_num_workers": 4,
+  "eval": "every epoch on coco/val, metric eval_map (torchmetrics mAP@[.5:.95], threshold 0.0); final/ = best-eval checkpoint (epoch 30, eval_map 0.8868)",
+  "augmentation_main_run": "Albumentations: Perspective(p=0.1), HorizontalFlip(p=0.5), RandomBrightnessContrast(p=0.5), HueSaturationValue(p=0.1); BboxParams coco, clip=True, min_area=25",
+  "augmentation_comparison_run": "none (--no-augment), all other settings identical",
+  "tiling": {"tile": 1500, "overlap": 0.2},
+  "inference_postprocessing": "detkit predict: tile 1500 / overlap 0.2, per-class NMS iou 0.4 + ioma 0.7 across tiles",
+  "determinism_note": "seeds fixed, but cuDNN/CUDA kernels not forced deterministic (no full_determinism): reruns can differ slightly"
+}
