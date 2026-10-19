@@ -8,7 +8,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from .merge import nms_per_class
+from .merge import keep_dominant_class, nms_per_class
+from .preprocess import PREPROCESSOR
 from .tiling import IMAGE_EXT, plan_tiles
 from .train import META
 from .viz import draw_boxes
@@ -28,7 +29,9 @@ def load_model(ckpt: str | Path, device: str | None = None):
 
 def predict_image(image: Image.Image, model, proc, device: str, *, tile: int, overlap: float,
                   crop=None, score: float = 0.5, batch: int = 4,
-                  iou_thr: float = 0.4, ioma_thr: float = 0.7) -> list[dict]:
+                  iou_thr: float = 0.4, ioma_thr: float = 0.7, single_class: bool = True) -> list[dict]:
+    """Tiled detection of one photo. ``single_class`` (default): a photo shows one grain type, so only the boxes
+    of its most prominent class are kept (``merge.keep_dominant_class``); False returns every class."""
     import torch
 
     rects = plan_tiles(image.size, crop, tile, overlap)
@@ -48,17 +51,21 @@ def predict_image(image: Image.Image, model, proc, device: str, *, tile: int, ov
                 labels.append(int(l))
     keep = nms_per_class(boxes, labels, scores, iou_thr=iou_thr, ioma_thr=ioma_thr)
     id2label = model.config.id2label
-    return [{"bbox": [round(v, 1) for v in boxes[k]], "score": round(scores[k], 4),
+    dets = [{"bbox": [round(v, 1) for v in boxes[k]], "score": round(scores[k], 4),
              "label": id2label.get(labels[k], str(labels[k])), "label_id": labels[k]} for k in keep]
+    return keep_dominant_class(dets) if single_class else dets
 
 
 def predict_paths(ckpt: str | Path, inputs: list[str | Path], out_dir: str | Path, *,
                   tile: int | None = None, overlap: float | None = None, crop=None,
                   score: float = 0.5, device: str | None = None, batch: int = 4,
                   threads: int | None = None, max_side: int | None = None,
-                  overlay: bool = True) -> dict:
+                  overlay: bool = True, canonicalize: bool = False, single_class: bool = True) -> dict:
     """``max_side`` downscales the photo before tiling (boxes are scaled back; ``tile``/``crop`` are
-    then in downscaled pixels - use it for speed on CPU). ``threads`` sets torch CPU threads."""
+    then in downscaled pixels - use it for speed on CPU). ``threads`` sets torch CPU threads.
+    ``canonicalize`` applies ``PREPROCESSOR.canonicalize`` to every photo first (use it for RAW photos;
+    photos from <workdir>/photos are already canonical and must not be warped again). Boxes, overlays and
+    ``crop`` are then in the canonical frame."""
     import torch
 
     if threads:
@@ -77,13 +84,15 @@ def predict_paths(ckpt: str | Path, inputs: list[str | Path], out_dir: str | Pat
     for f in files:
         with Image.open(f) as im:
             im = im.convert("RGB")
+            if canonicalize:
+                im = PREPROCESSOR.canonicalize(im)
             orig_size = im.size
             work = im
             if max_side and max(im.size) > max_side:
                 k = max_side / max(im.size)
                 work = im.resize((round(im.width * k), round(im.height * k)), Image.LANCZOS)
             dets = predict_image(work, model, proc, device, tile=tile, overlap=overlap,
-                                 crop=crop, score=score, batch=batch)
+                                 crop=crop, score=score, batch=batch, single_class=single_class)
             if work is not im:                      # back to original pixel coordinates
                 sx, sy = orig_size[0] / work.width, orig_size[1] / work.height
                 for d in dets:
@@ -94,7 +103,7 @@ def predict_paths(ckpt: str | Path, inputs: list[str | Path], out_dir: str | Pat
                            labels=[d["label_id"] for d in dets], scores=[d["score"] for d in dets],
                            width=max(3, round(max(im.size) / 250)), maxside=1600, names=names)
         result[f.name] = {"count": len(dets), "per_class": dict(Counter(d["label"] for d in dets)),
-                          "detections": dets}
+                          "canonicalized": bool(canonicalize), "detections": dets}
         print(f"{f.name}: {len(dets)} {dict(Counter(d['label'] for d in dets))}", flush=True)
     (out_dir / "predictions.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     return result

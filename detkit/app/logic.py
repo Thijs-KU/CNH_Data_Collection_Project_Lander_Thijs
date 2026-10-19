@@ -17,6 +17,7 @@ from PIL import Image
 
 from .. import coco as C
 from ..merge import iou
+from ..preprocess import PREPROCESSOR
 from ..schema import AUTO_IMAGE_KEYS, BOX_FIELDS, EXTRA_KINDS, IMAGE_FIELDS, Field, coerce
 from ..tiling import IMAGE_EXT
 from ..viz import PALETTE
@@ -269,8 +270,9 @@ def list_photos(photos_dir: Path) -> list[str]:
     return sorted(p.name for p in d.iterdir() if p.suffix.lower() in IMAGE_EXT) if d.is_dir() else []
 
 
-def import_photos(paths: list[str | Path], photos_dir: Path) -> list[str]:
-    """Copy files into *photos_dir* (never overwriting: ``name_1.jpg`` ...). Returns new names."""
+def import_photos(paths: list[str | Path], photos_dir: Path, canonicalize: bool = True) -> list[str]:
+    """Copy files into *photos_dir* (never overwriting: ``name_1.jpg`` ...). Returns new names.
+    ``canonicalize=False`` copies as is: for photos that are already canonical (see detkit/preprocess.py)."""
     photos_dir = Path(photos_dir)
     photos_dir.mkdir(parents=True, exist_ok=True)
     added = []
@@ -281,7 +283,7 @@ def import_photos(paths: list[str | Path], photos_dir: Path) -> list[str]:
         while dest.exists():
             dest = photos_dir / f"{p.stem}_{k}{p.suffix}"
             k += 1
-        shutil.copy(p, dest)
+        PREPROCESSOR.ingest(p, dest) if canonicalize else shutil.copy(p, dest)
         added.append(dest.name)
     return added
 

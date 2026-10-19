@@ -47,6 +47,24 @@ def nms_per_class(boxes: list, labels: list[int], scores: list[float] | None = N
     return sorted(keep)
 
 
+def keep_dominant_class(dets: list[dict]) -> list[dict]:
+    """One photo shows one grain type, so keep only the boxes of its most prominent class and erase the rest
+    (the same kernel often gets boxes of two or three classes, only one of which is right).
+
+    ``dets``: ``[{"bbox", "score", "label", ...}]``. Prominence = sum of the scores of a class's boxes, so many
+    confident boxes beat a few weak ones (and low-score junk hardly counts); ties go to the class with more
+    boxes, then to the smaller label. A kernel that only has a box of another class is dropped with it."""
+    if not dets:
+        return list(dets)
+    weight: dict = {}
+    count: dict = {}
+    for d in dets:
+        weight[d["label"]] = weight.get(d["label"], 0.0) + float(d.get("score") or 0.0)
+        count[d["label"]] = count.get(d["label"], 0) + 1
+    top = min(weight, key=lambda c: (-weight[c], -count[c], str(c)))
+    return [d for d in dets if d["label"] == top]
+
+
 def tiles_to_source(tiles_coco: dict, manifest: dict, iou_thr: float = 0.4,
                     ioma_thr: float = 0.7) -> dict:
     """Shift tile boxes by the tile offset, then per-class NMS per source photo."""

@@ -18,6 +18,7 @@ from ..project import Project
 from ..schema import BOX_FIELDS, IMAGE_FIELDS
 from . import logic as L
 from . import proposals as P
+from .corners_ui import build_corners_tab
 from .inference_ui import build_inference_tab
 
 try:                                                        # optional component
@@ -192,6 +193,9 @@ def build_app(workdir: str | Path, *, ckpt: str | None = None, device: str | Non
 
             with gr.Tab("Inference"):
                 build_inference_tab(project, wd, ckpt, dev)
+
+            with gr.Tab("Corners") as corners_tab:
+                build_corners_tab(project, wd, corners_tab)
 
         # ---------------------------------------------------------------- helpers
         form_inputs = set(comps)

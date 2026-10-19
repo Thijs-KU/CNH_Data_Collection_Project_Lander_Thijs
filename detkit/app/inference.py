@@ -15,6 +15,7 @@ from typing import Callable
 from PIL import Image
 
 from .. import weight as W
+from ..preprocess import PREPROCESSOR
 from ..train import META
 from ..viz import draw_boxes
 from . import logic as L
@@ -158,6 +159,7 @@ def run_inference(paths: list[Path], per_photo: dict[str, dict], project, *, ckp
     for i, p in enumerate(paths):
         if on_photo:
             on_photo(i, len(paths), p.name)
+        p = PREPROCESSOR.canonical_path(p, Path(cache) / "canonical")   # same frame as stored photos
         meta = {k: v for k, v in (per_photo.get(p.name) or {}).items() if v not in (None, "")}
         crop = meta.get("crop")
         try:
@@ -182,7 +184,7 @@ def save_samples(project, items: list[dict], proposer: str = "rfdetr") -> list[s
     store = project.store()
     names = []
     for it in items:
-        name = L.import_photos([it["path"]], project.photos_dir)[0]
+        name = L.import_photos([it["path"]], project.photos_dir, canonicalize=False)[0]   # already canonical
         with Image.open(project.photos_dir / name) as im:
             size = im.size
         meta = {k: it["meta"].get(k) for k in ("crop", "total_weight_g")

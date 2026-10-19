@@ -1,0 +1,157 @@
+"""Image preprocessing (OpenCV). Everything here is a no-op until you give the Preprocessor something to do.
+
+Two kinds of preprocessing, applied in different places:
+
+* ``canonicalize`` (geometric, e.g. warping the A4 sheet to a fixed top-down canvas). It may change the
+  image size, so it runs ONCE, when a photo enters the project (``detkit import-photos``, the Review tab
+  upload, the Inference tab upload). After that, the stored photo is the canonical one and every box,
+  area feature, overlay and eval works in that frame without further changes.
+* ``apply`` (photometric, e.g. contrast, white balance, shadow reduction). Must keep the image size.
+  Not wired into the pipeline yet; intended for the top of ``predict.predict_image``.
+
+Steps for ``apply`` are plain functions on an OpenCV image (BGR, uint8, HxWx3) that return the same shape::
+
+    def clahe(bgr):
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        l = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(l)
+        return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+
+    Preprocessor(steps=[clahe])
+
+Manual A4 warp: the app's "Corners" tab (app/corners_ui.py) lists the project photos, lets you click the
+4 sheet corners of a raw one and replaces it, in place, by the warped 900x1200 photo (``warp_to_canvas``
+below). The raw photo moves to <workdir>/photos_original; which photos are warped is in meta/warps.json.
+``import-photos`` and the Review upload copy photos as they are (raw): warp them afterwards in that tab.
+
+A ``canonicalizer`` is a function ``PIL.Image (RGB) -> PIL.Image (RGB)``; set it on the module-level
+``PREPROCESSOR`` below to switch the geometric stage on everywhere at once.
+"""
+
+from __future__ import annotations
+
+import math
+import shutil
+from pathlib import Path
+from typing import Callable, Sequence
+
+import cv2
+import numpy as np
+from PIL import Image
+
+Step = Callable[[np.ndarray], np.ndarray]            # BGR uint8 HxWx3 -> BGR uint8 HxWx3, same size
+Canonicalizer = Callable[[Image.Image], Image.Image]  # RGB PIL -> RGB PIL, size may change
+
+
+class Preprocessor:
+    def __init__(self, steps: Sequence[Step] | None = None, canonicalizer: Canonicalizer | None = None):
+        self.steps: list[Step] = list(steps or [])
+        self.canonicalizer = canonicalizer
+
+    # ---- photometric, size-preserving (not wired in yet) ---------------------------------------
+    def apply(self, image: Image.Image | np.ndarray) -> Image.Image | np.ndarray:
+        """Run all steps in order. A PIL image (RGB) comes back as PIL RGB, a numpy array (BGR, as
+        OpenCV reads it) comes back as numpy BGR. No steps: the input is returned as is."""
+        if not self.steps:
+            return image
+        is_pil = isinstance(image, Image.Image)
+        bgr = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR) if is_pil else image
+        size = bgr.shape[:2]
+        for step in self.steps:
+            bgr = step(bgr)
+            if bgr.shape[:2] != size:
+                raise ValueError(f"preprocessing step {getattr(step, '__name__', step)!r} changed the "
+                                 f"image size {size} -> {bgr.shape[:2]}; use a canonicalizer for geometry")
+        return Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)) if is_pil else bgr
+
+    __call__ = apply
+
+    # ---- geometric, once per photo, when it enters the project ---------------------------------
+    @property
+    def changes_geometry(self) -> bool:
+        return self.canonicalizer is not None
+
+    def canonicalize(self, image: Image.Image) -> Image.Image:
+        """Canonical version of a photo. For now: the image, unchanged."""
+        return image if self.canonicalizer is None else self.canonicalizer(image)
+
+    def ingest(self, src: str | Path, dst: str | Path) -> Path:
+        """Put the source photo at ``dst`` in canonical form. While nothing changes the photo this is a
+        byte-exact copy (so re-import checks that compare files keep working)."""
+        src, dst = Path(src), Path(dst)
+        if not self.changes_geometry:
+            shutil.copy2(src, dst)
+            return dst
+        with Image.open(src) as im:                      # pixels are not EXIF-rotated, like the rest of detkit
+            out = self.canonicalize(im.convert("RGB"))
+        out.save(dst, quality=95)                        # re-encoded without EXIF; quality only affects JPEG
+        return dst
+
+    def canonical_path(self, src: str | Path, out_dir: str | Path) -> Path:
+        """Path of the canonical version of ``src`` for read-only use (e.g. Inference uploads). Returns
+        ``src`` itself while nothing changes the photo, otherwise writes it into ``out_dir`` under the same name."""
+        src = Path(src)
+        if not self.changes_geometry:
+            return src
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return self.ingest(src, out_dir / src.name)
+
+
+# One shared instance: set ``PREPROCESSOR.canonicalizer`` (or replace it) to turn the geometric stage on.
+PREPROCESSOR = Preprocessor()
+
+
+# ---- manual A4 warp --------------------------------------------------------------------------------
+WARPS_FILE = "warps.json"                 # <workdir>/meta/: corners + matrix of every warped photo
+CANVAS_SIZE = (900, 1200)                 # (width, height) in px of the warped photo: A4 portrait
+SHEET_MM = (210.0, 297.0)                 # A4 (width, height) in mm, portrait
+# 900x1200 is 3:4, A4 is 1:1.414, so the scale differs by axis (x: 0.2333, y: 0.2475 mm/px). Pixel AREAS
+# still convert with one constant (mm2 = px2 * x * y), so ``scale_mm_per_px`` is their geometric mean.
+MM_PER_PX = (SHEET_MM[0] / CANVAS_SIZE[0], SHEET_MM[1] / CANVAS_SIZE[1])
+SCALE_MM_PER_PX = math.sqrt(MM_PER_PX[0] * MM_PER_PX[1])
+
+
+def order_corners(pts) -> np.ndarray:
+    """4 clicked points in any order -> float32 (4, 2) as top-left, top-right, bottom-right, bottom-left of
+    the PORTRAIT sheet (short edge on top). Of the two rotations that qualify, the one whose first corner is
+    nearer the image's top-left wins, so the warped photo comes out upright whatever the click order."""
+    p = np.asarray(pts, dtype=np.float64).reshape(-1, 2)
+    if len(p) != 4:
+        raise ValueError(f"need exactly 4 corners, got {len(p)}")
+    c = p.mean(axis=0)
+    p = p[np.argsort(np.arctan2(p[:, 1] - c[1], p[:, 0] - c[0]))]       # clockwise on screen (y points down)
+    cross = []
+    for i in range(4):
+        a, b = p[(i + 1) % 4] - p[i], p[(i + 2) % 4] - p[(i + 1) % 4]
+        cross.append(a[0] * b[1] - a[1] * b[0])
+    if not (all(x > 0 for x in cross) or all(x < 0 for x in cross)):
+        raise ValueError("the 4 points do not form a convex quadrilateral: click the corners of the sheet")
+    best = None
+    for k in range(4):
+        q = np.roll(p, -k, axis=0)
+        if np.linalg.norm(q[1] - q[0]) <= np.linalg.norm(q[3] - q[0]):     # top edge is the short edge
+            if best is None or q[0].sum() < best[0]:
+                best = (q[0].sum(), q)
+    return best[1].astype(np.float32)
+
+
+def warp_to_canvas(image: Image.Image, corners, size: tuple[int, int] = CANVAS_SIZE, supersample: int = 2
+                   ) -> tuple[Image.Image, dict]:
+    """Perspective-warp the quadrilateral ``corners`` (pixels of ``image``, any order) onto a ``size`` canvas.
+    Warps at ``supersample`` x the size and shrinks with INTER_AREA, so a big photo does not alias. Returns
+    the RGB image and ``{"corners" (ordered), "matrix" (source px -> canvas px), "canvas", "mm_per_px"}``."""
+    W, H = size
+    src = order_corners(corners)
+    bgr = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+    def dst(k: int) -> np.ndarray:
+        return np.float32([[0, 0], [W * k, 0], [W * k, H * k], [0, H * k]])
+
+    big = cv2.warpPerspective(bgr, cv2.getPerspectiveTransform(src, dst(supersample)),
+                              (W * supersample, H * supersample), flags=cv2.INTER_LINEAR,
+                              borderMode=cv2.BORDER_REPLICATE)
+    out = cv2.resize(big, (W, H), interpolation=cv2.INTER_AREA) if supersample > 1 else big
+    info = {"corners": src.tolist(), "matrix": cv2.getPerspectiveTransform(src, dst(1)).tolist(),
+            "canvas": [W, H], "mm_per_px": [SHEET_MM[0] / W, SHEET_MM[1] / H]}
+    return Image.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB)), info

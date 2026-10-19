@@ -99,7 +99,8 @@ def cmd_predict(a) -> int:
     crop = tuple(int(v) for v in a.crop.split(",")) if a.crop else None
     predict_paths(a.model, a.images, a.out, tile=a.tile, overlap=a.overlap, crop=crop,
                   score=a.score, batch=a.batch, threads=a.threads, max_side=a.max_side,
-                  overlay=not a.no_overlay)
+                  overlay=not a.no_overlay, canonicalize=a.canonicalize,
+                  single_class=not a.keep_all_classes)
     return 0
 
 
@@ -180,6 +181,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="downscale the photo to this longest side before tiling (fast on CPU; "
                         "tile/crop then refer to the downscaled image)")
     s.add_argument("--no-overlay", action="store_true", help="skip drawing overlay images")
+    s.add_argument("--keep-all-classes", action="store_true",
+                   help="keep the boxes of every class (default: only the photo's most prominent class)")
+    s.add_argument("--canonicalize", action="store_true",
+                   help="apply the project preprocessing (detkit/preprocess.py) first: for RAW photos only, "
+                        "NOT for photos already in <workdir>/photos")
 
     s = add("doctor", cmd_doctor, "check GPU/torch and HF token", workdir=False)
     s.add_argument("--online", action="store_true", help="also ping HF (no secrets printed)")

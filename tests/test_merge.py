@@ -34,3 +34,26 @@ def test_tiles_to_source_offsets_and_dedup():
     assert out["images"][0]["file_name"] == "p.jpg" and out["images"][0]["width"] == 2000
     assert C.count_per_class(out) == {"a": 1, "b": 1}
     assert out["annotations"][0]["bbox"] == [650.0, 100.0, 100.0, 100.0]
+
+
+def d(label, score, box=(0, 0, 10, 10)):
+    return {"bbox": list(box), "score": score, "label": label}
+
+
+def test_keep_dominant_class_drops_the_other_labels():
+    dets = [d("popcorn_corn", 0.9, (0, 0, 10, 10)), d("pumpkin", 0.6, (1, 1, 11, 11)),     # same kernel, two labels
+            d("popcorn_corn", 0.8, (50, 50, 60, 60)), d("wheat", 0.3, (90, 90, 95, 95))]
+    out = merge.keep_dominant_class(dets)
+    assert [x["label"] for x in out] == ["popcorn_corn", "popcorn_corn"] and out[0] is dets[0]
+
+
+def test_keep_dominant_class_weighs_by_score_not_just_count():
+    dets = [d("a", 0.9), d("a", 0.9), d("b", 0.1), d("b", 0.1), d("b", 0.1), d("b", 0.1)]   # 4 weak b vs 2 strong a
+    assert {x["label"] for x in merge.keep_dominant_class(dets)} == {"a"}
+
+
+def test_keep_dominant_class_edge_cases():
+    assert merge.keep_dominant_class([]) == []
+    tie = [d("b", 0.5), d("a", 0.5)]
+    assert [x["label"] for x in merge.keep_dominant_class(tie)] == ["a"]                    # deterministic tie-break
+    assert merge.keep_dominant_class([{"bbox": [0, 0, 1, 1], "label": "x"}])[0]["label"] == "x"   # no score at all

@@ -144,3 +144,24 @@ def test_retile_skips_unreviewed_empty_photos_but_keeps_reviewed_negatives(tmp_p
     files = {i["file_name"].split("_x")[0] for i in C.load(p.tiles_coco)["images"]}
     assert "b" not in files and "c" in files and "a" in files
     assert stats["photos_skipped_unlabelled"] == ["b.jpg"]
+
+def test_reimport_with_canonicalizer(tmp_path, photos, monkeypatch):
+    """Once photos are changed on ingest, re-import must still recognise the same source."""
+    from PIL import Image
+    from detkit.preprocess import PREPROCESSOR
+
+    w = _proj(tmp_path)
+    p = Project.load(w)
+    import_photos(p, photos)                                          # legacy-style import, preprocessing off
+    monkeypatch.setattr(PREPROCESSOR, "canonicalizer", lambda im: im.resize((20, 10)))
+    with pytest.raises(ValueError, match="other preprocessing"):      # stored in the old frame: not the same
+        import_photos(p, photos)
+    r = import_photos(p, photos, force=True)
+    assert len(r["overwritten"]) == 3 and Image.open(p.photos_dir / "a.jpg").size == (20, 10)
+    r = import_photos(p, photos)                                      # same sources again: skipped, not refused
+    assert len(r["identical_skipped"]) == 3 and r["copied"] == [] and r["overwritten"] == []
+    d2 = tmp_path / "p2"
+    d2.mkdir()
+    Image.new("RGB", (10, 10)).save(d2 / "a.jpg")
+    with pytest.raises(ValueError, match="differs"):                  # a different source still refuses
+        import_photos(p, d2)

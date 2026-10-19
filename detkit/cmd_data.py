@@ -7,14 +7,15 @@ from __future__ import annotations
 
 import csv
 import filecmp
+import hashlib
 import json
-import shutil
 import sys
 from pathlib import Path
 
 from PIL import Image
 
 from . import coco as C
+from .preprocess import PREPROCESSOR, WARPS_FILE
 from .project import Project
 from .schema import IMAGE_FIELDS, coerce
 from .tiling import IMAGE_EXT
@@ -45,6 +46,52 @@ def _canon_crop(crop: str, classes: list[str]) -> str | None:
     return next((c for c in classes if c.lower() == crop.strip().lower()), None)
 
 
+SOURCES_FILE = "photo_sources.json"     # <workdir>/meta/: how each stored photo was made from its source
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sources_path(p: Project) -> Path:
+    return p.workdir / "meta" / SOURCES_FILE
+
+
+def _load_sources(p: Project) -> dict:
+    f = _sources_path(p)
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+
+
+def _warped_original(p: Project, name: str) -> Path | None:
+    """The untouched original of a photo that the app's Corners tab warped in place, if it was."""
+    f = p.workdir / "meta" / WARPS_FILE
+    rec = json.loads(f.read_text(encoding="utf-8")).get(name) if f.exists() else None
+    return p.workdir / "photos_original" / rec["source"] if rec else None
+
+
+def _same_source(src: Path, dst: Path, rec: dict | None, warped_from: Path | None = None) -> bool:
+    """Is the stored photo ``dst`` what ingesting ``src`` would produce now?
+
+    A photo warped in place by the Corners tab is the same source when ``src`` equals its saved original
+    (``warped_from``).
+
+    The stored photo may be a warped version of the source, so the bytes cannot be compared. Instead each
+    ingest records the sha256 of its source and whether it was canonicalized. Photos without a record
+    (imported before this existed) are compared byte for byte, which only makes sense while the
+    preprocessing leaves photos unchanged; with it on, their frame is unknown, so they count as different
+    (``--force`` re-imports them; boxes already saved for them stay in the OLD frame, so re-review those).
+    Changing the canonicalizer itself is not detected: re-import with ``--force``."""
+    if warped_from is not None:
+        return warped_from.exists() and _sha256(warped_from) == _sha256(src)
+    if rec is not None:
+        return rec.get("canonical") == PREPROCESSOR.changes_geometry and rec.get("sha256") == _sha256(src)
+    return not PREPROCESSOR.changes_geometry and filecmp.cmp(src, dst, shallow=False)
+
+
 def import_photos(p: Project, images: str | Path, *, defaults: dict | None = None,
                   meta_rows: dict[str, dict] | None = None, force: bool = False,
                   add_class: str | None = None) -> dict:
@@ -62,6 +109,7 @@ def import_photos(p: Project, images: str | Path, *, defaults: dict | None = Non
         new_class = None
     # resolve + validate all metadata before touching the disk
     plan, problems = [], []
+    sources = _load_sources(p)
     for f in files:
         m = {**defaults, **meta_rows.get(f.name, {})}
         if m.get("crop") is not None:
@@ -71,8 +119,10 @@ def import_photos(p: Project, images: str | Path, *, defaults: dict | None = Non
                                 "(use --add-class NAME to add it)")
             m["crop"] = c
         dst = p.photos_dir / f.name
-        if dst.exists() and not filecmp.cmp(f, dst, shallow=False) and not force:
-            problems.append(f"{f.name}: differs from existing {dst} (use --force to overwrite)")
+        if dst.exists() and not _same_source(f, dst, sources.get(dst.name), _warped_original(p, dst.name)) \
+                and not force:
+            problems.append(f"{f.name}: differs from existing {dst} or was stored with other preprocessing "
+                            "(use --force to overwrite; boxes already saved for it stay in the old frame)")
         plan.append((f, dst, m))
     unknown_rows = sorted(set(meta_rows) - {f.name for f in files})
     if problems:
@@ -86,15 +136,14 @@ def import_photos(p: Project, images: str | Path, *, defaults: dict | None = Non
     res = {"copied": [], "identical_skipped": [], "overwritten": [], "registered": [],
            "already_in_store": [], "added_class": new_class, "unmatched_meta_rows": unknown_rows}
     for f, dst, m in plan:
-        if dst.exists():
-            if filecmp.cmp(f, dst, shallow=False):
-                res["identical_skipped"].append(f.name)
-            else:
-                shutil.copy2(f, dst)
-                res["overwritten"].append(f.name)
+        if dst.exists() and _same_source(f, dst, sources.get(dst.name), _warped_original(p, dst.name)):
+            res["identical_skipped"].append(f.name)
         else:
-            shutil.copy2(f, dst)
-            res["copied"].append(f.name)
+            res["overwritten" if dst.exists() else "copied"].append(f.name)
+            PREPROCESSOR.ingest(f, dst)
+            sources[dst.name] = {"sha256": _sha256(f), "canonical": PREPROCESSOR.changes_geometry}
+            _sources_path(p).parent.mkdir(parents=True, exist_ok=True)
+            _sources_path(p).write_text(json.dumps(sources, indent=1), encoding="utf-8")
         if f.name in have:
             res["already_in_store"].append(f.name)     # boxes/metadata untouched
             continue

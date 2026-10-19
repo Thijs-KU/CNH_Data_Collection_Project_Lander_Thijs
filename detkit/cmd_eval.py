@@ -9,12 +9,21 @@ from pathlib import Path
 
 from . import coco as C
 from .evaluate import evaluate, preds_from_json, write_report
+from .preprocess import PREPROCESSOR
 from .project import Project
 
 
 def _center_in(box, crop) -> bool:
     cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
     return crop[0] <= cx < crop[2] and crop[1] <= cy < crop[3]
+
+
+def _check_frame(name: str, size: tuple[int, int], gt_img: dict) -> None:
+    """The image must have the size its ground-truth boxes were made on, else every metric is meaningless."""
+    gw, gh = gt_img.get("width"), gt_img.get("height")
+    if gw and gh and (int(gw), int(gh)) != tuple(size):
+        raise ValueError(f"{name}: image is {size[0]}x{size[1]} but its ground truth was made on {gw}x{gh}. "
+                         "Pass the canonical photos (<workdir>/photos), or --canonicalize if --images holds raw photos.")
 
 
 def _run_model(a, gt_coco, images_dir: Path, level: str, manifest: dict | None, out: Path) -> tuple[dict, list[str]]:
@@ -31,14 +40,19 @@ def _run_model(a, gt_coco, images_dir: Path, level: str, manifest: dict | None, 
         f = img["file_name"]
         with Image.open(images_dir / f) as im:
             im = im.convert("RGB")
+            if getattr(a, "canonicalize", False):
+                im = PREPROCESSOR.canonicalize(im)
+            _check_frame(f, im.size, img)
             if level == "tile":                       # the image IS one tile: single pass, no re-tiling
                 tile, ov, crop = max(im.size), 0.0, None
             else:
                 src = (manifest or {}).get("sources", {}).get(f, {})
                 crop = crop_a or (tuple(src["crop"]) if src.get("crop") else None)
                 tile, ov = a.tile or src.get("tile") or tp.get("tile") or 800, overlap
-            dets = predict_image(im, model, proc, device, tile=tile, overlap=ov, crop=crop, score=a.score)
-        result[f] = {"count": len(dets), "per_class": dict(Counter(d["label"] for d in dets)), "detections": dets}
+            dets = predict_image(im, model, proc, device, tile=tile, overlap=ov, crop=crop, score=a.score,
+                                 single_class=not getattr(a, "keep_all_classes", False))
+        result[f] = {"count": len(dets), "per_class": dict(Counter(d["label"] for d in dets)),
+                     "canonicalized": bool(getattr(a, "canonicalize", False)), "detections": dets}
         print(f"{f}: {len(dets)}", flush=True)
     out.mkdir(parents=True, exist_ok=True)
     (out / "predictions.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
@@ -68,7 +82,11 @@ def cmd_eval(a) -> int:
     out = Path(a.out) if a.out else p.reports_dir / f"eval_{name}"
     model_labels = None
     if a.model:
-        preds_json, model_labels = _run_model(a, gt, images_dir, level, manifest, out)
+        try:
+            preds_json, model_labels = _run_model(a, gt, images_dir, level, manifest, out)
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 1
         pred_desc = f"model `{a.model}` run at score >= {a.score} ({level}-level inference)"
     else:
         preds_json = json.loads(Path(a.pred).read_text(encoding="utf-8"))
@@ -121,6 +139,11 @@ def register(sub) -> None:
     g.add_argument("--model", help="checkpoint dir (…/final); runs inference (tiled for source-level GT)")
     s.add_argument("--score", type=float, default=0.05, help="score floor for --model inference")
     s.add_argument("--images", help="image dir for --model (default: photos/ for reviewed, coco/val/images for val)")
+    s.add_argument("--keep-all-classes", action="store_true",
+                   help="--model: keep the boxes of every class (default: only each photo's most prominent class)")
+    s.add_argument("--canonicalize", action="store_true",
+                   help="apply the project preprocessing (detkit/preprocess.py) to the photos first: only when "
+                        "--images holds RAW photos; the size must then match the ground truth")
     s.add_argument("--iou", type=float, default=0.5)
     s.add_argument("--op-score", type=float, default=0.5, help="score threshold for the headline P/R/F1 and count error")
     s.add_argument("--map", action="store_true", help="also compute mAP over IoU 0.5:0.95")
