@@ -9,6 +9,7 @@ import gradio as gr
 import pandas as pd
 
 from ..preprocess import DEFAULT_CONTRAST, TARGET_BRIGHTNESS
+from ..project import DEFAULT_SCORE, DEFAULT_TILE
 from . import inference as I
 from . import proposals as P
 
@@ -42,7 +43,9 @@ def per_photo_from_table(df, classes: list[str]) -> dict[str, dict]:
 
 def build_inference_tab(project, wd: Path, ckpt: str | None, device: str) -> None:
     cache = wd / ".app_cache" / "inference"
-    score0, score_note = I.default_score(wd)
+    best, best_note = I.default_score(wd)
+    score0 = DEFAULT_SCORE
+    score_note = f"default {DEFAULT_SCORE}" + (f"; {best_note}: {best}" if best_note.startswith("best-F1") else "")
     cks = P.find_checkpoints(wd, ckpt, project.proposer_ckpt)
     d0 = I.ckpt_defaults(cks[0] if cks else None, project)
     classes = project.classes
@@ -63,7 +66,7 @@ def build_inference_tab(project, wd: Path, ckpt: str | None, device: str) -> Non
             model_dd = gr.Dropdown(choices=I.model_choices(), value="count_x_constant", label="weight model")
             with gr.Row():
                 score = gr.Slider(0.05, 0.95, score0, step=0.01, label="score threshold", info=score_note)
-                tile = gr.Slider(200, 1600, d0["tile"], step=50, label="tile (px)")
+                tile = gr.Slider(200, 1600, DEFAULT_TILE, step=50, label="tile (px)")
                 overlap = gr.Slider(0.0, 0.5, d0["overlap"], step=0.05, label="overlap")
             with gr.Row():
                 max_side = gr.Slider(0, 6000, 0, step=100, label="downscale longest side to (0 = off; faster on CPU)")
@@ -114,8 +117,8 @@ def build_inference_tab(project, wd: Path, ckpt: str | None, device: str) -> Non
 
     for trig in (files.change, norm_on.change, n_target.release, n_contrast.release):
         trig(preview, inputs=[files, norm_on, n_target, n_contrast], outputs=[pre_gal], api_name=False)
-    ck_dd.change(lambda c: (lambda d: (d["tile"], d["overlap"]))(I.ckpt_defaults(c, project)), inputs=[ck_dd],
-                 outputs=[tile, overlap], api_name=False)
+    ck_dd.change(lambda c: I.ckpt_defaults(c, project)["overlap"], inputs=[ck_dd], outputs=[overlap],
+                 api_name=False)
 
     def run(d, progress=gr.Progress()):
         paths = [Path(p) for p in (d[files] or [])]
@@ -168,7 +171,7 @@ def build_inference_tab(project, wd: Path, ckpt: str | None, device: str) -> Non
         per = {p.name: {"crop": crop or None, "total_weight_g": weight_g or None} for p in paths}
         c = I.ckpt_defaults(ckpt_dir, project)
         rows, its, _ = I.run_inference(paths, per, project, ckpt=ckpt_dir, device=device, score=score_thr,
-                                       tile=c["tile"], overlap=c["overlap"], max_side=0, roi_text="",
+                                       tile=DEFAULT_TILE, overlap=c["overlap"], max_side=0, roi_text="",
                                        model_name=model_name, cache=cache,
                                        normalize=(TARGET_BRIGHTNESS, DEFAULT_CONTRAST) if normalize else None)
         saved = I.save_samples(project, its) if save_samples else []

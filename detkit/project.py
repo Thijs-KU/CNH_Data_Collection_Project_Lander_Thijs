@@ -24,6 +24,11 @@ FLOWS: dict[str, dict] = {
 }
 
 
+# Detection defaults (app sliders and `detkit predict`); the project's own `tile` is the tiling used for training.
+DEFAULT_SCORE = 0.2
+DEFAULT_TILE = 1150
+
+
 @dataclass
 class Project:
     workdir: Path

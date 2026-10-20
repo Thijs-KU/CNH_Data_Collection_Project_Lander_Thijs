@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import coco as C
 from .preprocess import DEFAULT_CONTRAST, TARGET_BRIGHTNESS
-from .project import Project, load_env, parse_classes
+from .project import DEFAULT_SCORE, DEFAULT_TILE, Project, load_env, parse_classes
 
 
 def _project(a) -> Project:
@@ -173,8 +173,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--model", required=True, help="checkpoint dir (…/final)")
     s.add_argument("--images", nargs="+", required=True)
     s.add_argument("--out", default="predictions")
-    s.add_argument("--score", type=float, default=0.5)
-    s.add_argument("--tile", type=int)
+    s.add_argument("--score", type=float, default=DEFAULT_SCORE)
+    s.add_argument("--tile", type=int, default=DEFAULT_TILE)
     s.add_argument("--overlap", type=float)
     s.add_argument("--crop", help="x0,y0,x1,y1 region to scan (default: whole photo)")
     s.add_argument("--batch", type=int, default=4, help="tiles per forward pass")

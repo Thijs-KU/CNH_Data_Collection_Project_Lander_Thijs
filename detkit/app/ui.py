@@ -14,7 +14,7 @@ from pathlib import Path
 import gradio as gr
 import pandas as pd
 
-from ..project import Project
+from ..project import DEFAULT_SCORE, DEFAULT_TILE, Project
 from ..schema import BOX_FIELDS, IMAGE_FIELDS
 from . import logic as L
 from . import proposals as P
@@ -140,8 +140,8 @@ def build_app(workdir: str | Path, *, ckpt: str | None = None, device: str | Non
                                                     label="RF-DETR checkpoint (folder with config.json)")
                                 mode = gr.Radio(list(L.MODES), value=L.MODES[0], label="When proposing")
                             with gr.Row():
-                                score = gr.Slider(0.05, 0.95, 0.5, step=0.01, label="score threshold")
-                                tile = gr.Slider(200, 1600, project.tile, step=50, label="tile (px)")
+                                score = gr.Slider(0.05, 0.95, DEFAULT_SCORE, step=0.01, label="score threshold")
+                                tile = gr.Slider(200, 1600, DEFAULT_TILE, step=50, label="tile (px)")
                                 overlap = gr.Slider(0.0, 0.5, project.overlap, step=0.05, label="overlap")
                                 max_side = gr.Slider(0, 6000, 0, step=100,
                                                      label="downscale longest side to (0 = off; faster on CPU)")

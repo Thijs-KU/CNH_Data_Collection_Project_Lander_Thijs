@@ -12,6 +12,7 @@ from typing import Callable, Iterator
 
 from PIL import Image
 
+from ..project import DEFAULT_SCORE, DEFAULT_TILE
 from . import logic as L
 
 
@@ -116,8 +117,8 @@ def parse_roi(text: str | None, size: tuple[int, int]) -> tuple[int, int, int, i
 
 # ---- RF-DETR -----------------------------------------------------------------------------------
 def propose_rfdetr(image: Image.Image, bundle, classes: list[str], crop: str | None, *,
-                   score: float = 0.5, tile: int = 800, overlap: float = 0.2, max_side: int = 0,
-                   roi: tuple[int, int, int, int] | None = None,
+                   score: float = DEFAULT_SCORE, tile: int = DEFAULT_TILE, overlap: float = 0.2,
+                   max_side: int = 0, roi: tuple[int, int, int, int] | None = None,
                    predict_fn: Callable | None = None) -> tuple[list[dict], dict]:
     """Tiled RF-DETR proposals for one photo. ``max_side`` > 0 downsizes the (ROI of the) photo so
     its longest side is at most that many px before tiling (CPU-friendly; boxes are scaled back)."""
@@ -146,7 +147,7 @@ def propose_rfdetr(image: Image.Image, bundle, classes: list[str], crop: str | N
 
 
 
-def propose_photos(project, files: list[str], bundle, *, score: float = 0.5, tile: int = 800,
+def propose_photos(project, files: list[str], bundle, *, score: float = DEFAULT_SCORE, tile: int = DEFAULT_TILE,
                    overlap: float = 0.2, max_side: int = 0, mode: str = L.MODES[0]
                    ) -> Iterator[tuple[str, int | None, str | None]]:
     """Batch proposals for photos in ``W/photos``: each photo's boxes are combined with the stored ones
