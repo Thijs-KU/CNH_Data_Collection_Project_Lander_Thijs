@@ -9,7 +9,7 @@ from pathlib import Path
 from PIL import Image
 
 from .merge import keep_dominant_class, nms_per_class
-from .preprocess import PREPROCESSOR
+from .preprocess import PREPROCESSOR, before_after, prepare_photo
 from .tiling import IMAGE_EXT, plan_tiles
 from .train import META
 from .viz import draw_boxes
@@ -60,12 +60,15 @@ def predict_paths(ckpt: str | Path, inputs: list[str | Path], out_dir: str | Pat
                   tile: int | None = None, overlap: float | None = None, crop=None,
                   score: float = 0.5, device: str | None = None, batch: int = 4,
                   threads: int | None = None, max_side: int | None = None,
-                  overlay: bool = True, canonicalize: bool = False, single_class: bool = True) -> dict:
+                  overlay: bool = True, canonicalize: bool = False, single_class: bool = True,
+                  normalize: tuple[float, float] | None = None) -> dict:
     """``max_side`` downscales the photo before tiling (boxes are scaled back; ``tile``/``crop`` are
     then in downscaled pixels - use it for speed on CPU). ``threads`` sets torch CPU threads.
     ``canonicalize`` applies ``PREPROCESSOR.canonicalize`` to every photo first (use it for RAW photos;
     photos from <workdir>/photos are already canonical and must not be warped again). Boxes, overlays and
-    ``crop`` are then in the canonical frame."""
+    ``crop`` are then in the canonical frame. ``normalize`` = (target brightness, contrast) brings every RAW photo
+    to the same brightness as the project photos (``preprocess.prepare_photo``; photos from a project's photos
+    folder are skipped); with ``overlay`` a side-by-side ``<name>_pre.jpg`` shows what changed."""
     import torch
 
     if threads:
@@ -86,6 +89,14 @@ def predict_paths(ckpt: str | Path, inputs: list[str | Path], out_dir: str | Pat
             im = im.convert("RGB")
             if canonicalize:
                 im = PREPROCESSOR.canonicalize(im)
+            norm = None
+            if normalize:
+                before = im
+                im, norm = prepare_photo(im, f, normalize)
+                if norm and overlay:
+                    before_after(before, im, norm, f.name).save(out_dir / f"{f.stem}_pre.jpg", quality=90)
+                print(f"{f.name}: " + (f"brightness {norm['before']:.0f} -> {norm['after']:.0f}" if norm
+                                      else "already a project photo: not normalized"), flush=True)
             orig_size = im.size
             work = im
             if max_side and max(im.size) > max_side:
@@ -103,7 +114,7 @@ def predict_paths(ckpt: str | Path, inputs: list[str | Path], out_dir: str | Pat
                            labels=[d["label_id"] for d in dets], scores=[d["score"] for d in dets],
                            width=max(3, round(max(im.size) / 250)), maxside=1600, names=names)
         result[f.name] = {"count": len(dets), "per_class": dict(Counter(d["label"] for d in dets)),
-                          "canonicalized": bool(canonicalize), "detections": dets}
+                          "canonicalized": bool(canonicalize), "normalized": norm, "detections": dets}
         print(f"{f.name}: {len(dets)} {dict(Counter(d['label'] for d in dets))}", flush=True)
     (out_dir / "predictions.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     return result

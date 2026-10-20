@@ -158,7 +158,8 @@ def warp_to_canvas(image: Image.Image, corners, size: tuple[int, int] = CANVAS_S
 
 
 # ---- brightness / contrast normalization ------------------------------------------------------------
-TARGET_BRIGHTNESS = 200                   # default: median lightness (CIELAB L, 0-255) the photo is brought to
+TARGET_BRIGHTNESS = 220                   # default: median lightness (CIELAB L, 0-255) the photo is brought to
+DEFAULT_CONTRAST = 1.0                    # default contrast enhancement (0 = off, 1 = full CLAHE)
 MAX_GAMMA = 6.0                           # limits how far one photo may be pushed (gamma in [1/6, 6])
 
 
@@ -176,7 +177,7 @@ def brightness(image: Image.Image, maxside: int = 512) -> float:
     return _median_u8(cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2LAB)[..., 0])
 
 
-def normalize_brightness(image: Image.Image, target: float = TARGET_BRIGHTNESS, contrast: float = 0.0
+def normalize_brightness(image: Image.Image, target: float = TARGET_BRIGHTNESS, contrast: float = DEFAULT_CONTRAST
                          ) -> tuple[Image.Image, dict]:
     """Bring the median lightness of ``image`` to ``target`` (1-254), optionally with contrast enhancement.
 
@@ -208,3 +209,41 @@ def normalize_brightness(image: Image.Image, target: float = TARGET_BRIGHTNESS, 
         gamma = float(np.clip(gamma * math.log(target / 255) / math.log(after / 255), 1 / MAX_GAMMA, MAX_GAMMA))
     return Image.fromarray(rgb), {"target": float(target), "contrast": float(contrast), "gamma": round(gamma, 4),
                                   "before": before, "after": after}
+
+
+# ---- the same normalization for photos that are NOT in the project yet ---------------------------------
+def in_project_photos(path: str | Path) -> bool:
+    """Is ``path`` a photo inside a project's ``photos`` folder (<workdir>/photos next to project.json)? Those are
+    already preprocessed (warped / normalized in the Preprocessing tab) and must not be processed twice."""
+    d = Path(path).resolve().parent
+    return d.name == "photos" and (d.parent / "project.json").exists()
+
+
+def prepare_photo(image: Image.Image, source: str | Path, normalize: tuple[float, float] | None
+                  ) -> tuple[Image.Image, dict | None]:
+    """Detection-time brightness / contrast normalization of a RAW photo, with the same function the
+    Preprocessing tab applies to project photos, so uploads, ``detkit predict`` and ``detkit eval --images``
+    are comparable with them. ``normalize`` = (target, contrast), or None for no change. Photos that already are
+    in a project's ``photos`` folder are returned unchanged. Returns the image and the info dict (None if untouched)."""
+    if not normalize or in_project_photos(source):
+        return image, None
+    return normalize_brightness(image, *normalize)
+
+
+def before_after(before: Image.Image, after: Image.Image, info: dict, name: str = "", height: int = 500) -> Image.Image:
+    """Original and normalized photo side by side with their median brightness, to look at what was changed."""
+    from PIL import ImageDraw
+
+    def small(im):
+        k = height / im.height
+        return im.convert("RGB").resize((max(1, round(im.width * k)), height), Image.LANCZOS)
+
+    a, b, bar = small(before), small(after), 22
+    out = Image.new("RGB", (a.width + b.width + 6, height + bar), (30, 30, 30))
+    out.paste(a, (0, bar))
+    out.paste(b, (a.width + 6, bar))
+    d = ImageDraw.Draw(out)
+    d.text((4, 5), f"{name} original  brightness {info['before']:.0f}", fill=(255, 255, 255))
+    d.text((a.width + 10, 5), f"normalized -> {info['after']:.0f} (target {info['target']:.0f}, "
+                              f"contrast {info['contrast']:.2f})", fill=(255, 255, 255))
+    return out

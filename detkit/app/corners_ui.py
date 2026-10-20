@@ -6,7 +6,7 @@ from pathlib import Path
 
 import gradio as gr
 
-from ..preprocess import CANVAS_SIZE, TARGET_BRIGHTNESS
+from ..preprocess import CANVAS_SIZE, DEFAULT_CONTRAST, TARGET_BRIGHTNESS
 from . import corners as K
 
 HELP = (
@@ -72,8 +72,8 @@ def build_corners_tab(project, wd: Path, tab=None) -> None:
             status = gr.Markdown()
             gr.Markdown("#### Brightness and contrast")
             target = gr.Slider(60, 240, value=TARGET_BRIGHTNESS, step=1, label="Target brightness (median, 0-255)",
-                               info="all photos end at this level; ~200 = light grey-white paper")
-            contrast = gr.Slider(0, 1, value=0.0, step=0.05, label="Contrast enhancement (0 = off)",
+                               info="all photos end at this level; ~220 = light, bright white paper")
+            contrast = gr.Slider(0, 1, value=DEFAULT_CONTRAST, step=0.05, label="Contrast enhancement (0 = off)",
                                  info="mixes in local contrast (CLAHE) before the brightness step")
             bprev = gr.Image(type="pil", interactive=False, label="Brightness preview (what Apply stores)")
             bstatus = gr.Markdown()

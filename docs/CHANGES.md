@@ -8,6 +8,33 @@ headless-browser run of the app on Gradio 6.28); not run on the Windows `.venv`,
 
 ---
 
+## 2026-10-20 (2): the same normalization for uploads, `predict` and `eval`; new defaults 220 / contrast 1.0
+
+* Defaults changed everywhere: target brightness **220** (was 200), contrast enhancement **1.0** (was 0). They are
+  `TARGET_BRIGHTNESS` / `DEFAULT_CONTRAST` in `detkit/preprocess.py` and the start values of all sliders.
+  Photos you already normalized keep the settings stored in `meta/warps.json`; apply again to change them.
+* `detkit/preprocess.py`: `prepare_photo(image, source, normalize)` (normalizes a RAW photo, leaves photos from a
+  project's `photos` folder alone, so nothing is processed twice), `in_project_photos(path)` and
+  `before_after(...)` (original | normalized side by side with the median brightness).
+* **Inference tab** (`detkit/app/inference.py`, `inference_ui.py`): checkbox "Normalize brightness / contrast first"
+  (on), target and contrast sliders. A gallery "Preprocessing: original vs normalized" fills as soon as photos are
+  uploaded or a slider is released, before any detection; the detector, the overlays and the results then use the
+  normalized photo. *Save as samples* stores the normalized photo in the project and keeps the raw upload in
+  `photos_original/` with its settings in `meta/warps.json`, so the Preprocessing tab can redo or undo it
+  (`corners.adopt_normalized`). The scripted `infer` API takes `normalize` (default true).
+* `detkit predict --normalize [--target-brightness 220] [--contrast 1.0]` and the same flags on
+  `detkit eval --model ... --images <raw folder>`. Per photo the log prints `brightness before -> after`;
+  `predictions.json` gets `"normalized": {target, contrast, gamma, before, after}` (null = untouched); `predict`
+  writes `<name>_pre.jpg` (original | normalized, next to the overlay unless `--no-overlay`), `eval` writes
+  `<out>/normalized/<name>_pre.jpg`. Photos taken from a project's `photos` folder (the eval default) are skipped.
+  Order with `--canonicalize`: canonicalize first, then normalize (same order as the project photos).
+* Tests: `tests/test_preprocess.py` (defaults, CLI flags, `prepare_photo`), `tests/test_app.py` (Inference: only
+  uploads are normalized, saved with record and original), `tests/test_predict_single_class.py` (`predict_paths` and
+  eval `_run_model` with a stubbed model). Also driven in a headless browser.
+* Limits: a very dark photo (median below roughly 100) cannot reach 220 because gamma is capped at 1/6 (the preview
+  and the log show the value actually reached). Contrast 1.0 (full CLAHE) also sharpens the kernel edges, so re-check
+  detector counts and box areas on normalized photos before relying on the area constant.
+
 ## 2026-10-20: "Corners" tab renamed "Preprocessing", brightness / contrast normalization
 
 * The tab is now called **Preprocessing** (label in `detkit/app/ui.py`). Entries below that say "Corners tab" mean

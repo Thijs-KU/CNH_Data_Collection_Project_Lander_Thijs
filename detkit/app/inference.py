@@ -15,9 +15,10 @@ from typing import Callable
 from PIL import Image
 
 from .. import weight as W
-from ..preprocess import PREPROCESSOR
+from ..preprocess import PREPROCESSOR, before_after, in_project_photos, normalize_brightness
 from ..train import META
 from ..viz import draw_boxes
+from . import corners as K
 from . import logic as L
 from . import proposals as P
 
@@ -145,21 +146,51 @@ def overlay(path: Path, dets: list[dict], classes: list[str], out: Path, maxside
     return Path(out)
 
 
+def prepare_photos(paths: list[Path], project, cache: Path, normalize: tuple[float, float] | None
+                   ) -> tuple[list[Path], list[tuple[str, str]], dict[str, dict]]:
+    """Bring uploaded (RAW) photos into the frame and brightness of the project photos: canonicalize, then, if
+    ``normalize`` = (target, contrast), normalize brightness / contrast. Photos that already are in the project's
+    photos folder are left alone. Returns ``(prepared paths, [(side-by-side image, caption)], {file: info})``;
+    the side-by-side images (original | normalized) are what the tab shows."""
+    cache = Path(cache)
+    out, views, infos = [], [], {}
+    for src in map(Path, paths):
+        p = PREPROCESSOR.canonical_path(src, cache / "canonical")
+        if normalize and not in_project_photos(p) and p.parent.resolve() != Path(project.photos_dir).resolve():
+            with Image.open(p) as im:
+                before = im.convert("RGB")
+            img, info = normalize_brightness(before, *normalize)
+            (cache / "normalized").mkdir(parents=True, exist_ok=True)
+            (cache / "pre").mkdir(parents=True, exist_ok=True)
+            dst = cache / "normalized" / p.name
+            img.save(dst, quality=95)
+            vis = cache / "pre" / f"{p.stem}_pre.jpg"
+            before_after(before, img, info, p.name).save(vis, quality=90)
+            views.append((str(vis), f"{p.name}: brightness {info['before']:.0f} -> {info['after']:.0f}"))
+            infos[p.name], p = info, dst
+        out.append(p)
+    return out, views, infos
+
+
 def run_inference(paths: list[Path], per_photo: dict[str, dict], project, *, ckpt: str, device: str,
                   score: float, tile: int, overlap: float, max_side: int, roi_text: str, model_name: str,
-                  cache: Path, on_photo: Callable[[int, int, str], None] | None = None
+                  cache: Path, on_photo: Callable[[int, int, str], None] | None = None,
+                  normalize: tuple[float, float] | None = None, views: list | None = None
                   ) -> tuple[list[dict], list[dict], list[str]]:
     """Run all photos. ``per_photo[file] = {crop, total_weight_g}`` (optional). ``on_photo(i, n, name)``
     is called before photo *i* (progress). Returns ``(rows, items, overlay_paths)``; *items* keep the
-    detections for Save as samples."""
+    detections for Save as samples. ``normalize`` = (target brightness, contrast) normalizes the uploaded photos
+    first (see :func:`prepare_photos`); its side-by-side images are appended to ``views`` if given."""
     cfg = W.load_config(project.workdir)
     model = load_weight_model(project.workdir, model_name, cfg)
     bundle = P.load_bundle(ckpt, device)
     rows, items, overlays = [], [], []
-    for i, p in enumerate(paths):
+    prepared, vs, infos = prepare_photos(paths, project, Path(cache), normalize)   # same frame + brightness as stored photos
+    if views is not None:
+        views.extend(vs)
+    for i, (src, p) in enumerate(zip(map(Path, paths), prepared)):
         if on_photo:
             on_photo(i, len(paths), p.name)
-        p = PREPROCESSOR.canonical_path(p, Path(cache) / "canonical")   # same frame as stored photos
         meta = {k: v for k, v in (per_photo.get(p.name) or {}).items() if v not in (None, "")}
         crop = meta.get("crop")
         try:
@@ -172,7 +203,7 @@ def run_inference(paths: list[Path], per_photo: dict[str, dict], project, *, ckp
             meta["crop"] = dominant_class(dets)
         row = estimate_row(p.name, dets, meta, model, cfg)
         rows.append(row)
-        items.append({"path": str(p), "dets": dets, "meta": meta})
+        items.append({"path": str(p), "dets": dets, "meta": meta, "original": str(src), "norm": infos.get(p.name)})
         overlays.append(str(overlay(p, dets, project.classes, Path(cache) / f"{p.stem}_pred.jpg")))
     return rows, items, overlays
 
@@ -185,6 +216,8 @@ def save_samples(project, items: list[dict], proposer: str = "rfdetr") -> list[s
     names = []
     for it in items:
         name = L.import_photos([it["path"]], project.photos_dir, canonicalize=False)[0]   # already canonical
+        if it.get("norm"):                          # keep the raw upload, so Preprocessing can redo / undo it
+            K.adopt_normalized(project, name, Path(it["original"]), it["norm"])
         with Image.open(project.photos_dir / name) as im:
             size = im.size
         meta = {k: it["meta"].get(k) for k in ("crop", "total_weight_g")

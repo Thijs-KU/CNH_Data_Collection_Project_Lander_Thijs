@@ -420,3 +420,29 @@ def test_unsaved_edits_survive_refresh(wd):
     out3 = _ui(wd)[1]["start"](None)                               # opening a photo does not create a draft
     assert "Restored" not in out3[4]
     assert json.loads((wd.workdir / ".app_cache" / "drafts.json").read_text()) == {}
+
+
+def test_inference_normalizes_uploads_not_project_photos(wd, tmp_path, monkeypatch):
+    from detkit.app import corners as K
+    from detkit.preprocess import brightness
+    _fake_propose(monkeypatch, n=2)
+    up = tmp_path / "up"
+    up.mkdir()
+    Image.new("RGB", (800, 600), (120, 120, 120)).save(up / "new.png")
+    views: list = []
+    cache = tmp_path / "cache"
+    rows, items, ovs = I.run_inference(
+        [up / "new.png", wd.photos_dir / "small.png"], {}, wd, ckpt="ck", device="cpu", score=0.3, tile=800,
+        overlap=0.2, max_side=0, roi_text="", model_name="count_x_constant", cache=cache,
+        normalize=(220, 1.0), views=views)
+    assert len(views) == 1 and "new.png" in views[0][1] and Path(views[0][0]).exists()     # only the upload
+    assert abs(brightness(Image.open(items[0]["path"])) - 220) <= 2
+    assert items[1]["norm"] is None and Path(items[1]["path"]) == wd.photos_dir / "small.png"
+    names = I.save_samples(wd, items[:1])
+    assert names == ["new.png"] and abs(brightness(Image.open(wd.photos_dir / "new.png")) - 220) <= 2
+    rec = K.load_warps(wd)["new.png"]                                  # the raw upload is kept and the step recorded
+    assert rec["normalize"]["target"] == 220 and (wd.workdir / "photos_original" / rec["source"]).exists()
+    assert brightness(Image.open(wd.workdir / "photos_original" / rec["source"])) < 150
+    assert K.rows(wd)[[r[0] for r in K.rows(wd)].index("new.png")][5] == "yes"
+    I.run_inference([up / "new.png"], {}, wd, ckpt="ck", device="cpu", score=0.3, tile=800, overlap=0.2,
+                    max_side=0, roi_text="", model_name="count_x_constant", cache=tmp_path / "c2")   # off by default

@@ -17,7 +17,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from .. import coco as C
-from ..preprocess import (CANVAS_SIZE, SCALE_MM_PER_PX, TARGET_BRIGHTNESS, WARPS_FILE, brightness,
+from ..preprocess import (CANVAS_SIZE, DEFAULT_CONTRAST, SCALE_MM_PER_PX, TARGET_BRIGHTNESS, WARPS_FILE, brightness,
                           normalize_brightness, order_corners, warp_to_canvas)
 from . import logic as L
 
@@ -212,7 +212,7 @@ def normalized_preview(project, name: str | None, target: float, contrast: float
                  f"gamma {info['gamma']:.2f}" + (f", contrast {contrast:.2f}" if contrast else "") + ").")
 
 
-def normalize_photo(project, name: str, target: float = TARGET_BRIGHTNESS, contrast: float = 0.0) -> str:
+def normalize_photo(project, name: str, target: float = TARGET_BRIGHTNESS, contrast: float = DEFAULT_CONTRAST) -> str:
     """Store ``name`` with its median brightness at ``target`` (and ``contrast`` 0-1 enhancement), in place.
     Always computed from the original (and the recorded warp), so repeating it with other settings does not
     stack. Boxes are NOT touched: brightness does not move pixels."""
@@ -243,7 +243,7 @@ def reset_photo_brightness(project, name: str) -> str:
     return f"Removed the brightness change from `{name}`."
 
 
-def normalize_all(project, target: float = TARGET_BRIGHTNESS, contrast: float = 0.0) -> str:
+def normalize_all(project, target: float = TARGET_BRIGHTNESS, contrast: float = DEFAULT_CONTRAST) -> str:
     """:func:`normalize_photo` for every photo of the project, so they all end at the same brightness."""
     names, done, failed = L.list_photos(project.photos_dir), 0, []
     for n in names:
@@ -254,3 +254,13 @@ def normalize_all(project, target: float = TARGET_BRIGHTNESS, contrast: float = 
             failed.append(f"{n} ({e})")
     msg = f"Normalized {done} of {len(names)} photos to brightness {target:.0f}."
     return msg + (f" Failed: {', '.join(failed)}." if failed else "")
+
+
+def adopt_normalized(project, name: str, original: Path, info: dict) -> None:
+    """Record that the project photo ``name`` is ``original`` (a raw upload, e.g. from the Inference tab) after a
+    brightness normalization ``info``, so the Preprocessing tab can redo or undo it from the raw photo."""
+    warps = load_warps(project)
+    if name in warps:
+        return
+    warps[name] = {"source": _keep_original(project, name, Path(original), None), "normalize": info}
+    _write_warps(project, warps)

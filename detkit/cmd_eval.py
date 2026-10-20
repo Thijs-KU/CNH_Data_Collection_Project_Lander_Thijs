@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import coco as C
 from .evaluate import evaluate, preds_from_json, write_report
-from .preprocess import PREPROCESSOR
+from .preprocess import DEFAULT_CONTRAST, PREPROCESSOR, TARGET_BRIGHTNESS, before_after, prepare_photo
 from .project import Project
 
 
@@ -43,6 +43,14 @@ def _run_model(a, gt_coco, images_dir: Path, level: str, manifest: dict | None, 
             if getattr(a, "canonicalize", False):
                 im = PREPROCESSOR.canonicalize(im)
             _check_frame(f, im.size, img)
+            norm = None
+            if getattr(a, "normalize", False):
+                before = im
+                im, norm = prepare_photo(im, images_dir / f, (a.target_brightness, a.contrast))
+                if norm:
+                    (out / "normalized").mkdir(parents=True, exist_ok=True)
+                    before_after(before, im, norm, f).save(out / "normalized" / f"{Path(f).stem}_pre.jpg", quality=90)
+                    print(f"{f}: brightness {norm['before']:.0f} -> {norm['after']:.0f}", flush=True)
             if level == "tile":                       # the image IS one tile: single pass, no re-tiling
                 tile, ov, crop = max(im.size), 0.0, None
             else:
@@ -52,7 +60,7 @@ def _run_model(a, gt_coco, images_dir: Path, level: str, manifest: dict | None, 
             dets = predict_image(im, model, proc, device, tile=tile, overlap=ov, crop=crop, score=a.score,
                                  single_class=not getattr(a, "keep_all_classes", False))
         result[f] = {"count": len(dets), "per_class": dict(Counter(d["label"] for d in dets)),
-                     "canonicalized": bool(getattr(a, "canonicalize", False)), "detections": dets}
+                     "canonicalized": bool(getattr(a, "canonicalize", False)), "normalized": norm, "detections": dets}
         print(f"{f}: {len(dets)}", flush=True)
     out.mkdir(parents=True, exist_ok=True)
     (out / "predictions.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
@@ -144,6 +152,14 @@ def register(sub) -> None:
     s.add_argument("--canonicalize", action="store_true",
                    help="apply the project preprocessing (detkit/preprocess.py) to the photos first: only when "
                         "--images holds RAW photos; the size must then match the ground truth")
+    s.add_argument("--normalize", action="store_true",
+                   help="bring RAW photos to the project's brightness / contrast first (same as the Preprocessing "
+                        "tab); photos already in a project's photos folder are skipped. A side-by-side *_pre.jpg "
+                        "shows what changed")
+    s.add_argument("--target-brightness", type=float, default=TARGET_BRIGHTNESS,
+                   help="--normalize: median brightness 0-255 (default %(default)s)")
+    s.add_argument("--contrast", type=float, default=DEFAULT_CONTRAST,
+                   help="--normalize: contrast enhancement 0-1 (default %(default)s)")
     s.add_argument("--iou", type=float, default=0.5)
     s.add_argument("--op-score", type=float, default=0.5, help="score threshold for the headline P/R/F1 and count error")
     s.add_argument("--map", action="store_true", help="also compute mAP over IoU 0.5:0.95")

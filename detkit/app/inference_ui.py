@@ -8,6 +8,7 @@ from pathlib import Path
 import gradio as gr
 import pandas as pd
 
+from ..preprocess import DEFAULT_CONTRAST, TARGET_BRIGHTNESS
 from . import inference as I
 from . import proposals as P
 
@@ -67,7 +68,15 @@ def build_inference_tab(project, wd: Path, ckpt: str | None, device: str) -> Non
             with gr.Row():
                 max_side = gr.Slider(0, 6000, 0, step=100, label="downscale longest side to (0 = off; faster on CPU)")
                 roi = gr.Textbox(label="ROI x0,y0,x1,y1 (original px, optional)")
+            norm_on = gr.Checkbox(True, label="Normalize brightness / contrast first (same as the Preprocessing tab)",
+                                  info="uploads are made as bright as the project photos; photos already in the "
+                                       "project are not changed again")
+            with gr.Row():
+                n_target = gr.Slider(60, 240, TARGET_BRIGHTNESS, step=1, label="target brightness (median, 0-255)")
+                n_contrast = gr.Slider(0, 1, DEFAULT_CONTRAST, step=0.05, label="contrast enhancement (0 = off)")
             run_b = gr.Button("Run inference", variant="primary")
+    pre_gal = gr.Gallery(label="Preprocessing: original (left) vs normalized (right) - what the detector sees",
+                         columns=1, height=420, object_fit="contain")
     status = gr.Markdown("")
     gallery = gr.Gallery(label="Detections", columns=4, height=340, object_fit="contain")
     res = gr.Dataframe(headers=I.RESULT_COLUMNS, value=_df([], I.RESULT_COLUMNS), interactive=False,
@@ -92,6 +101,19 @@ def build_inference_tab(project, wd: Path, ckpt: str | None, device: str) -> Non
         return _df(rows, PHOTO_COLS)
 
     files.change(on_upload, inputs=[files], outputs=[photo_tbl], api_name=False)
+
+    def preview(paths, on, tgt, con):
+        """Show the normalization before anything is detected (no model needed)."""
+        ps = [Path(p) for p in (paths or [])]
+        if not ps or not on:
+            return []
+        try:
+            return I.prepare_photos(ps, project, cache, (float(tgt), float(con)))[1]
+        except (ValueError, OSError) as e:
+            raise gr.Error(str(e))
+
+    for trig in (files.change, norm_on.change, n_target.release, n_contrast.release):
+        trig(preview, inputs=[files, norm_on, n_target, n_contrast], outputs=[pre_gal], api_name=False)
     ck_dd.change(lambda c: (lambda d: (d["tile"], d["overlap"]))(I.ckpt_defaults(c, project)), inputs=[ck_dd],
                  outputs=[tile, overlap], api_name=False)
 
@@ -103,10 +125,12 @@ def build_inference_tab(project, wd: Path, ckpt: str | None, device: str) -> Non
             raise gr.Error("Choose an RF-DETR checkpoint (folder with config.json).")
         try:
             per = per_photo_from_table(d[photo_tbl], classes)
+            views: list = []
             rows, its, ovs = I.run_inference(
                 paths, per, project, ckpt=d[ck_dd], device=device, score=d[score], tile=int(d[tile]),
                 overlap=float(d[overlap]), max_side=int(d[max_side] or 0), roi_text=d[roi] or "",
                 model_name=d[model_dd], cache=cache,
+                normalize=(float(d[n_target]), float(d[n_contrast])) if d[norm_on] else None, views=views,
                 on_photo=lambda i, n, name: progress((i, n), desc=f"detecting {name}", unit="photos"))
         except (ValueError, FileNotFoundError, OSError) as e:
             raise gr.Error(str(e))
@@ -115,10 +139,11 @@ def build_inference_tab(project, wd: Path, ckpt: str | None, device: str) -> Non
         msg = (f"{len(rows)} photo(s) processed with score >= {d[score]}, tile {int(d[tile])}."
                + (" No weight: " + "; ".join(notes) if notes else ""))
         return ovs, _df([[r.get(c) for c in I.RESULT_COLUMNS] for r in rows], I.RESULT_COLUMNS), str(csv_path), \
-            msg, its
+            msg, its, views
 
-    run_b.click(run, inputs={files, photo_tbl, ck_dd, score, tile, overlap, max_side, roi, model_dd},
-                outputs=[gallery, res, csv_f, status, items], api_name=False)
+    run_b.click(run, inputs={files, photo_tbl, ck_dd, score, tile, overlap, max_side, roi, model_dd,
+                             norm_on, n_target, n_contrast},
+                outputs=[gallery, res, csv_f, status, items, pre_gal], api_name=False)
 
     def save(its):
         if not its:
@@ -136,14 +161,16 @@ def build_inference_tab(project, wd: Path, ckpt: str | None, device: str) -> Non
 
     # ---- scriptable API (used by tests) ------------------------------------------------------
     def api_infer(paths_json: str, ckpt_dir: str, model_name: str = "count_x_constant", score_thr: float = 0.5,
-                  crop: str = "", weight_g: float = 0.0, save_samples: bool = False) -> dict:
+                  crop: str = "", weight_g: float = 0.0, save_samples: bool = False,
+                  normalize: bool = True) -> dict:
         """Run inference on photo paths (absolute, or names in W/photos); returns result rows."""
         paths = [Path(p) if Path(p).is_absolute() else project.photos_dir / p for p in json.loads(paths_json)]
         per = {p.name: {"crop": crop or None, "total_weight_g": weight_g or None} for p in paths}
         c = I.ckpt_defaults(ckpt_dir, project)
         rows, its, _ = I.run_inference(paths, per, project, ckpt=ckpt_dir, device=device, score=score_thr,
                                        tile=c["tile"], overlap=c["overlap"], max_side=0, roi_text="",
-                                       model_name=model_name, cache=cache)
+                                       model_name=model_name, cache=cache,
+                                       normalize=(TARGET_BRIGHTNESS, DEFAULT_CONTRAST) if normalize else None)
         saved = I.save_samples(project, its) if save_samples else []
         return {"rows": rows, "saved": saved}
 

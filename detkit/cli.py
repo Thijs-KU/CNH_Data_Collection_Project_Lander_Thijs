@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from . import coco as C
+from .preprocess import DEFAULT_CONTRAST, TARGET_BRIGHTNESS
 from .project import Project, load_env, parse_classes
 
 
@@ -100,7 +101,8 @@ def cmd_predict(a) -> int:
     predict_paths(a.model, a.images, a.out, tile=a.tile, overlap=a.overlap, crop=crop,
                   score=a.score, batch=a.batch, threads=a.threads, max_side=a.max_side,
                   overlay=not a.no_overlay, canonicalize=a.canonicalize,
-                  single_class=not a.keep_all_classes)
+                  single_class=not a.keep_all_classes,
+                  normalize=(a.target_brightness, a.contrast) if a.normalize else None)
     return 0
 
 
@@ -186,6 +188,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--canonicalize", action="store_true",
                    help="apply the project preprocessing (detkit/preprocess.py) first: for RAW photos only, "
                         "NOT for photos already in <workdir>/photos")
+    s.add_argument("--normalize", action="store_true",
+                   help="bring RAW photos to the project's brightness / contrast first (same as the Preprocessing "
+                        "tab); photos already in a project's photos folder are skipped. A side-by-side *_pre.jpg "
+                        "shows what changed")
+    s.add_argument("--target-brightness", type=float, default=TARGET_BRIGHTNESS,
+                   help="--normalize: median brightness 0-255 (default %(default)s)")
+    s.add_argument("--contrast", type=float, default=DEFAULT_CONTRAST,
+                   help="--normalize: contrast enhancement 0-1 (default %(default)s)")
 
     s = add("doctor", cmd_doctor, "check GPU/torch and HF token", workdir=False)
     s.add_argument("--online", action="store_true", help="also ping HF (no secrets printed)")
