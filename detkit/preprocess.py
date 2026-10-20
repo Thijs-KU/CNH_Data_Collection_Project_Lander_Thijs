@@ -155,3 +155,56 @@ def warp_to_canvas(image: Image.Image, corners, size: tuple[int, int] = CANVAS_S
     info = {"corners": src.tolist(), "matrix": cv2.getPerspectiveTransform(src, dst(1)).tolist(),
             "canvas": [W, H], "mm_per_px": [SHEET_MM[0] / W, SHEET_MM[1] / H]}
     return Image.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB)), info
+
+
+# ---- brightness / contrast normalization ------------------------------------------------------------
+TARGET_BRIGHTNESS = 200                   # default: median lightness (CIELAB L, 0-255) the photo is brought to
+MAX_GAMMA = 6.0                           # limits how far one photo may be pushed (gamma in [1/6, 6])
+
+
+def _median_u8(a: np.ndarray) -> float:
+    hist = np.bincount(a.ravel(), minlength=256)
+    return float(np.searchsorted(np.cumsum(hist), a.size / 2))
+
+
+def brightness(image: Image.Image, maxside: int = 512) -> float:
+    """Median lightness (CIELAB L scaled to 0-255) of ``image``. After the A4 warp this is the lightness of the
+    white paper (kernels cover well under half of the sheet), which is what ``normalize_brightness`` fixes."""
+    im = image.convert("RGB")
+    if max(im.size) > maxside:
+        im.thumbnail((maxside, maxside), Image.BILINEAR)
+    return _median_u8(cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2LAB)[..., 0])
+
+
+def normalize_brightness(image: Image.Image, target: float = TARGET_BRIGHTNESS, contrast: float = 0.0
+                         ) -> tuple[Image.Image, dict]:
+    """Bring the median lightness of ``image`` to ``target`` (1-254), optionally with contrast enhancement.
+
+    * ``contrast`` 0-1: how much of a CLAHE (local histogram equalisation, clip 2.0, 8x8 tiles) of the lightness
+      channel is mixed in BEFORE the brightness step. 0 = none. Colours (a, b channels) are not touched.
+    * brightness: one gamma curve on the lightness, chosen so the median lands on ``target``. A gamma keeps 0
+      and 255 fixed, so nothing clips; the gain is limited to gamma in [1/6, 6], so ``after`` can miss ``target``.
+    The size never changes, so boxes stay valid. Returns the RGB image and
+    ``{"target", "contrast", "gamma", "before", "after"}``."""
+    if not 1 <= target <= 254:
+        raise ValueError(f"target brightness must be between 1 and 254, got {target}")
+    if not 0 <= contrast <= 1:
+        raise ValueError(f"contrast must be between 0 and 1, got {contrast}")
+    lab = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2LAB)
+    lum = np.ascontiguousarray(lab[..., 0])
+    before = _median_u8(lum)
+    if contrast > 0:
+        eq = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(lum)
+        lum = cv2.addWeighted(lum, 1 - contrast, eq, contrast, 0)
+    mid = min(max(_median_u8(lum), 5.0), 250.0)                      # keep the logs below finite and non-zero
+    gamma = float(np.clip(math.log(target / 255) / math.log(mid / 255), 1 / MAX_GAMMA, MAX_GAMMA))
+    for _ in range(3):                                               # converting back to RGB can clip saturated
+        lut = np.clip(np.round(255 * (np.arange(256) / 255) ** gamma), 0, 255).astype(np.uint8)   # colours, so
+        lab[..., 0] = cv2.LUT(lum, lut)                              # measure the real output and correct
+        rgb = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+        after = _median_u8(np.ascontiguousarray(cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)[..., 0]))
+        if abs(after - target) <= 1 or not 0 < after < 255:
+            break
+        gamma = float(np.clip(gamma * math.log(target / 255) / math.log(after / 255), 1 / MAX_GAMMA, MAX_GAMMA))
+    return Image.fromarray(rgb), {"target": float(target), "contrast": float(contrast), "gamma": round(gamma, 4),
+                                  "before": before, "after": after}

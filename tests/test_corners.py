@@ -8,7 +8,7 @@ import pytest
 from PIL import Image
 
 from detkit.app import corners as K
-from detkit.preprocess import CANVAS_SIZE, SCALE_MM_PER_PX, order_corners, warp_to_canvas
+from detkit.preprocess import CANVAS_SIZE, SCALE_MM_PER_PX, brightness, normalize_brightness, order_corners, warp_to_canvas
 from detkit.project import Project
 
 W, H = CANVAS_SIZE
@@ -95,10 +95,10 @@ def test_list_matches_the_review_list_and_marks_warped(project):
     from detkit.app import logic as L
     r = K.rows(project)
     assert [x[0] for x in r] == L.list_photos(project.photos_dir) == ["IMG_1.jpg", "IMG_2.png"]
-    assert r[0] == ["IMG_1.jpg", "raw", "reviewed", 1, "3000x2250"]
+    assert r[0][:6] == ["IMG_1.jpg", "raw", "reviewed", 1, "3000x2250", "-"] and isinstance(r[0][6], int)
     assert r[1][:4] == ["IMG_2.png", "raw", "todo", 0]
     K.warp_photo(project, {**K.new_state(), "name": "IMG_2.png", "pts": QUAD})
-    assert K.rows(project)[1] == ["IMG_2.png", "warped", "todo", 0, "900x1200"]
+    assert K.rows(project)[1][:6] == ["IMG_2.png", "warped", "todo", 0, "900x1200", "-"]
 
 
 def test_warp_photo_in_place(project):
@@ -156,5 +156,75 @@ def test_tab_builds(project):
     gr = pytest.importorskip("gradio")
     from detkit.app.corners_ui import build_corners_tab
     with gr.Blocks():
-        with gr.Tab("Corners") as t:
+        with gr.Tab("Preprocessing") as t:
             build_corners_tab(project, project.workdir, t)
+
+
+# ---- brightness / contrast ----------------------------------------------------------------------------------
+def test_normalize_brightness_hits_the_target_and_keeps_the_size():
+    rng = np.random.default_rng(1)
+    for base in (80, 140, 230):
+        a = np.clip(rng.normal(base, 12, (240, 320, 3)), 0, 255).astype(np.uint8)
+        a[:40, :60] = 30                                                  # a dark "kernel" patch
+        im = Image.fromarray(a)
+        for con in (0.0, 0.7):
+            out, info = normalize_brightness(im, 200, con)
+            assert out.size == im.size and abs(info["after"] - 200) <= 1 and abs(brightness(out) - 200) <= 2
+    with pytest.raises(ValueError):
+        normalize_brightness(im, 300)
+    with pytest.raises(ValueError):
+        normalize_brightness(im, 200, 2)
+
+
+def test_contrast_enhancement_widens_the_spread():
+    y, x = np.mgrid[0:200, 0:300]
+    flat = np.dstack([120 + x // 30 + 0 * y] * 3).astype(np.uint8)         # nearly flat grey ramp
+    lo = np.asarray(normalize_brightness(Image.fromarray(flat), 200, 0)[0].convert("L")).std()
+    hi = np.asarray(normalize_brightness(Image.fromarray(flat), 200, 1)[0].convert("L")).std()
+    assert hi > lo
+
+
+def test_normalize_photo_keeps_boxes_and_is_redone_from_the_original(project):
+    raw = (project.photos_dir / "IMG_1.jpg").read_bytes()
+    before = project.store().get_image("IMG_1.jpg")
+    msg = K.normalize_photo(project, "IMG_1.jpg", 180, 0.0)
+    assert "IMG_1.jpg" in msg
+    assert project.store().get_image("IMG_1.jpg") == before                  # boxes + metadata untouched
+    assert Image.open(project.photos_dir / "IMG_1.jpg").size == (3000, 2250)
+    assert abs(brightness(Image.open(project.photos_dir / "IMG_1.jpg")) - 180) <= 2
+    assert (project.workdir / "photos_original" / "IMG_1.jpg").read_bytes() == raw
+    K.normalize_photo(project, "IMG_1.jpg", 150, 0.0)                         # other settings: no stacking
+    assert abs(brightness(Image.open(project.photos_dir / "IMG_1.jpg")) - 150) <= 2
+    assert K.rows(project)[0][1] == "raw" and K.rows(project)[0][5] == "yes"
+    assert "removed" in K.reset_photo_brightness(project, "IMG_1.jpg").lower()
+    assert "normalize" not in K.load_warps(project)["IMG_1.jpg"]
+    assert K.rows(project)[0][5] == "-"
+
+
+def test_warp_then_normalize_then_rewarp_keeps_the_brightness(project):
+    K.warp_photo(project, {**K.new_state(), "name": "IMG_2.png", "pts": QUAD})
+    K.normalize_photo(project, "IMG_2.png", 190, 0.0)
+    assert K.rows(project)[1][1:2] == ["warped"] and abs(K.rows(project)[1][6] - 190) <= 3
+    again = [[x + 5, y] for x, y in QUAD]
+    K.warp_photo(project, {**K.new_state(), "name": "IMG_2.png", "pts": again})
+    rec = K.load_warps(project)["IMG_2.png"]
+    assert np.allclose(rec["corners"], again) and rec["normalize"]["target"] == 190
+    assert abs(brightness(Image.open(project.photos_dir / "IMG_2.png")) - 190) <= 3
+    img, msg = K.normalized_preview(project, "IMG_2.png", 150, 0.3)
+    assert img.size == CANVAS_SIZE and "->" in msg
+    assert abs(brightness(Image.open(project.photos_dir / "IMG_2.png")) - 190) <= 3   # a preview stores nothing
+
+
+def test_normalize_all(project):
+    assert K.normalize_all(project, 200, 0.0).startswith("Normalized 2 of 2")
+    assert [abs(r[6] - 200) <= 2 for r in K.rows(project)] == [True, True]
+
+
+def test_reimport_of_a_normalized_photo_is_recognised(project, tmp_path):
+    from detkit.cmd_data import import_photos
+    src = tmp_path / "raw"
+    src.mkdir()
+    (src / "IMG_2.png").write_bytes((project.photos_dir / "IMG_2.png").read_bytes())
+    K.normalize_photo(project, "IMG_2.png", 150, 0.0)
+    r = import_photos(project, src)
+    assert r["identical_skipped"] == ["IMG_2.png"] and r["overwritten"] == []

@@ -194,7 +194,7 @@ def build_app(workdir: str | Path, *, ckpt: str | None = None, device: str | Non
             with gr.Tab("Inference"):
                 build_inference_tab(project, wd, ckpt, dev)
 
-            with gr.Tab("Corners") as corners_tab:
+            with gr.Tab("Preprocessing") as corners_tab:
                 build_corners_tab(project, wd, corners_tab)
 
         # ---------------------------------------------------------------- helpers

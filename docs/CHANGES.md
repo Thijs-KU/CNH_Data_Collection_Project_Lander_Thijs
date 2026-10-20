@@ -8,6 +8,43 @@ headless-browser run of the app on Gradio 6.28); not run on the Windows `.venv`,
 
 ---
 
+## 2026-10-20: "Corners" tab renamed "Preprocessing", brightness / contrast normalization
+
+* The tab is now called **Preprocessing** (label in `detkit/app/ui.py`). Entries below that say "Corners tab" mean
+  this tab; the files keep their names (`detkit/app/corners.py`, `corners_ui.py`).
+* `detkit/preprocess.py`: `TARGET_BRIGHTNESS = 200`, `brightness(image)` (median CIELAB lightness, 0-255) and
+  `normalize_brightness(image, target, contrast)`.
+  * One gamma curve on the lightness channel puts the median at `target`; gamma keeps black and white fixed, so
+    nothing clips, and is limited to [1/6, 6]. Colours (a, b) are not touched. Because converting back to RGB clips
+    very saturated colours, the real output is measured and gamma corrected up to 3 times; `after` in the returned
+    info is that measured value. White paper reaches the target; a saturated colour photo may stay a bit below a
+    high target.
+  * `contrast` 0-1 mixes in a CLAHE of the lightness channel (clip 2.0, 8x8 tiles) before the brightness step.
+  * The size never changes, so saved boxes stay valid.
+* `detkit/app/corners.py`: the pipeline of a stored photo is always *original -> recorded warp -> recorded
+  brightness*, rebuilt from `photos_original` and `meta/warps.json`, so changing a setting never stacks.
+  * `normalize_photo`, `reset_photo_brightness`, `normalize_all`, `normalized_preview` (stores nothing).
+  * A brightness change keeps boxes and metadata (unlike the warp). A redone warp re-applies the recorded
+    brightness. A photo that was never warped is normalized too: its raw copy goes to `photos_original`, and its
+    record has no `corners` (only warped photos show `warped` in the list).
+  * New list columns `normalized` (yes / -) and `brightness` (current median lightness), appended at the end.
+* `detkit/app/corners_ui.py`: "Brightness and contrast" panel with a target slider (60-240), a contrast slider
+  (0-1), a live preview (updates on slider release and when a photo is opened), *Apply to this photo*, *Apply to all
+  photos* and *Remove brightness change from this photo*.
+* `meta/warps.json` records get a `normalize` entry `{target, contrast, gamma, before, after}`; records of photos that
+  were only normalized have `source` and `normalize` but no `corners`.
+* Re-importing a raw source file after normalizing is recognised (same original), like after a warp.
+* Tests: `tests/test_corners.py` (target reached, contrast widens the spread, boxes kept, no stacking, reset, rewarp
+  keeps brightness, apply to all, re-import). Also driven in a headless browser (Gradio 6.28): preview, apply,
+  apply to all and reset all work, no console errors.
+* Limits:
+  * Brightness is a single global curve: uneven lighting or shadows on the sheet are not removed, and the median
+    includes whatever is not paper in a photo that was not warped, so warp first.
+  * Only photos already in the project are normalized. New Inference tab uploads, `detkit predict` and
+    `detkit eval --images <folder>` are not, so they should be normalized the same way before they are compared
+    with the project photos (not wired in yet; `Preprocessor.apply` is the intended place).
+  * Already reviewed boxes stay valid, but the detector's proposals may change on a normalized photo.
+
 ## 2026-10-19 (4): one class per photo
 
 A photo shows one grain type, but the detector often gives one kernel two or three boxes with different classes.
@@ -108,5 +145,5 @@ Changed: `detkit/app/inference.py`, `detkit/app/logic.py`, `detkit/app/ui.py`, `
 | Path | Written by | Content |
 |---|---|---|
 | `meta/photo_sources.json` | `import-photos` | sha256 of each source file + whether it was canonicalized |
-| `meta/warps.json` | Corners tab | per warped photo: original file name, corners, matrix, canvas, mm/px, discarded boxes |
-| `photos_original/` | Corners tab | the raw photo of every warped photo |
+| `meta/warps.json` | Preprocessing tab | per changed photo: original file name, warp (corners, matrix, canvas, mm/px, discarded boxes), brightness settings |
+| `photos_original/` | Preprocessing tab | the raw photo of every warped or normalized photo |
