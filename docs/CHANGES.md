@@ -8,6 +8,18 @@ headless-browser run of the app on Gradio 6.28); not run on the Windows `.venv`,
 
 ---
 
+## 2026-10-20 (3): detection defaults: score 0.2, tile 1150
+
+* `detkit/project.py`: `DEFAULT_SCORE = 0.2`, `DEFAULT_TILE = 1150` (px).
+* Review tab and Inference tab sliders start at these values (before: score 0.5, tile = the project's tile, in the
+  Inference tab the best-F1 score of the last eval and the checkpoint's tile). The Inference tab still shows the
+  best-F1 score of the newest eval as a hint under the score slider. Choosing another checkpoint now only changes
+  the overlap, no longer the tile.
+* `detkit predict`: `--score` defaults to 0.2 and `--tile` to 1150 (before: 0.5, and the checkpoint's tile).
+* `propose_rfdetr` / `propose_photos` and the scripted Inference `infer` API use the same defaults.
+* Not changed: `detkit eval --score` stays 0.05 (a floor, so the F1 curve can find its best score) and eval's tile
+  still comes from the manifest / checkpoint; the project's own `tile` (800, used to cut training tiles).
+
 ## 2026-10-20 (2): the same normalization for uploads, `predict` and `eval`; new defaults 220 / contrast 1.0
 
 * Defaults changed everywhere: target brightness **220** (was 200), contrast enhancement **1.0** (was 0). They are
