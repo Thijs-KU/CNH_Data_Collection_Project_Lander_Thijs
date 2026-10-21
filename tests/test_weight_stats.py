@@ -1,10 +1,10 @@
-"""feature_correlations, bootstrap_ci, learning_curve (docs/STUDENT_TASKS.md task 2)."""
+"""feature_correlations, bootstrap_ci, learning_curve (task 2, detkit/weight/stats.py)."""
 
 import numpy as np
 import pytest
 
 from detkit.cli import main
-from detkit.weight import SampleTable, bootstrap_ci, feature_correlations, learning_curve
+from detkit.weight import SampleTable, feature_correlations, bootstrap_ci, learning_curve
 
 
 def table(n_piles=20, per_pile=2, noise=0.25, seed=1, with_pile_id=True, share_noise=False):

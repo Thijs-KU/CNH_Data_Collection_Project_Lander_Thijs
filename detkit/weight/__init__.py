@@ -5,6 +5,7 @@ The `TODO(student)` markers show what to implement. Tasks are listed in docs/STU
     features.py  image_features, Sample, SampleTable   (working)
     models.py    WeightModel, CountTimesConstant, AreaTimesConstant (working; bounds TODO)
     stats.py     evaluate_model, feature_correlations, learning_curve, bootstrap_ci (working); propagate (TODO)
+    plots.py     figures of `detkit weight features`
     config.py    load_config / save_config (weight_config.json)
 """
 
@@ -16,4 +17,5 @@ from .stats import bootstrap_ci, evaluate_model, feature_correlations, learning_
 
 __all__ = ["image_features", "kernel_mask", "Sample", "SampleTable", "Estimate", "WeightModel", "FeatureTimesConstant",
            "CountTimesConstant", "AreaTimesConstant", "KernelAreaTimesConstant", "MODELS", "get_model",
-           "evaluate_model", "feature_correlations", "numeric_features", "learning_curve", "bootstrap_ci", "propagate", "load_config", "save_config"]
+           "evaluate_model", "feature_correlations", "numeric_features", "learning_curve", "bootstrap_ci", "propagate",
+           "load_config", "save_config"]
