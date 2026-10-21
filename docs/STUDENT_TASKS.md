@@ -10,7 +10,7 @@ justify your choices.
 | # | Task | Code |
 |---|---|---|
 | 1 | Plan the data collection: errors, how to prevent them, how to measure them | - |
-| 2 | Which feature tells you the weight, and how many samples you need | `detkit/weight/stats.py`: `learning_curve`, `bootstrap_ci` |
+| 2 | Which feature tells you the weight, and how many samples you need | `detkit/weight/stats.py`: `feature_correlations`, `bootstrap_ci`, `learning_curve` |
 | 3 | The bounds of your predictions, and how the error propagates | `detkit/weight/models.py`: `low_g`/`high_g`; `stats.py`: `propagate` |
 | 4 | Your team-mate repeats the procedure on a small sample: do the conclusions still hold? | - |
 | 5 | Report | - |
@@ -36,17 +36,26 @@ Name a property `scale_mm_per_px` and the area features are also given in mm² (
 
 ## 2. Which feature correlates best with weight, and how many samples do you need?
 You have collected samples and have the detector's boxes for them. The features per photo are `count`,
-`total_area_px`, `mean_area_px`, `median_area_px`, `mean_diag_px` (and the mm² ones with a scale); see
-`detkit/weight/features.py`.
-* Show how the different features correlate with the measured weight, and pick one.
-* How sure are you about that correlation? Implement `bootstrap_ci` (a confidence interval of `r` or the slope).
-* How many samples do you need to be sure about it? Implement `learning_curve`.
+`total_area_px`, `mean_area_px`, `median_area_px`, `mean_diag_px` (and the mm² ones with a scale) and, measured on
+the preprocessed photo, the kernel-pixel features `kernel_area_px`, `mean_kernel_area_px`, `median_kernel_area_px`,
+`kernel_fill_ratio`; see `detkit/weight/features.py`.
+* Show how the different features correlate with the measured weight, and pick one:
+  `detkit weight features --workdir $W --boot 1000 --plot features.png --plot-dir feature_plots` prints r, r², the
+  slope and a bootstrap interval of r for every feature (best first) and plots weight against each one (without
+  weights it plots the value of each feature per photo; `--show` opens the windows); in Python:
+  `feature_correlations(table)`. Correlation alone favours every feature that grows with the pile (count, box
+  area, kernel area): look at the residuals and at the calibration error too.
+* How sure are you about that correlation? `bootstrap_ci` gives a confidence interval of `r` or the slope.
+* How many samples do you need to be sure about it? `learning_curve` shows how that interval shrinks:
+  `detkit weight features --workdir $W --curve kernel_area_px --plot-dir feature_plots`.
 * How many photos of the **same** sample do you need? Compare the spread between photos of one pile with the
   spread between piles.
-* Photos of the same pile (same `pile_id`) are not independent samples: keep that in mind when you resample.
+* Photos of the same pile (same `pile_id`) are not independent samples: `bootstrap_ci` and `learning_curve` resample
+  whole piles for that reason (a photo without `pile_id` counts as its own pile).
 
 Then calibrate the model that uses your feature: `detkit weight calibrate --model count_x_constant` (weight = count
-x grams per kernel) or `--model area_x_constant` (weight = box area x grams per px²). See [WEIGHT.md](WEIGHT.md).
+x grams per kernel) or `--model area_x_constant` (weight = box area x grams per px²) or `--model kernel_area_x_constant` (weight = kernel
+pixels x grams per px²). See [WEIGHT.md](WEIGHT.md).
 
 ## 3. Bounds and error propagation
 * What could be the bounds of your predictions? Make the models return `low_g` / `high_g` (`TODO(student)` in

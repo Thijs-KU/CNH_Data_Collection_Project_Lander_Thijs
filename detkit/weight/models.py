@@ -124,8 +124,19 @@ class AreaTimesConstant(FeatureTimesConstant):
     config_key = "area_constants"
 
 
+class KernelAreaTimesConstant(FeatureTimesConstant):
+    """weight = kernel pixels (px^2) x grams per px^2 of the crop. Like ``area_x_constant`` but only the pixels
+    that really are kernel count (paper inside the boxes is left out), so tilted kernels and loose boxes no longer
+    inflate the area. Needs the photo when the features are made (``kernel_area_px``); same distance caveat."""
+    name = "kernel_area_x_constant"
+    description = "weight = kernel pixels (px^2, box background removed) x g/px^2 per crop"
+    feature = "kernel_area_px"
+    unit = "g/px^2 (kernel)"
+    config_key = "kernel_area_constants"
+
+
 MODELS: dict[str, type[WeightModel]] = {
-    m.name: m for m in (CountTimesConstant, AreaTimesConstant)
+    m.name: m for m in (CountTimesConstant, AreaTimesConstant, KernelAreaTimesConstant)
 }
 
 

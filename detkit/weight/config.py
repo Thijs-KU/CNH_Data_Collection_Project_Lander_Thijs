@@ -10,10 +10,12 @@ CONFIG_NAME = "weight_config.json"
 # Starting values only: calibrate your own with `detkit weight calibrate` (task 2).
 #   constants       grams per kernel      (count_x_constant)
 #   area_constants  grams per px^2 of box (area_x_constant; depends on camera distance, so no default)
+#   kernel_area_constants  grams per px^2 of kernel pixels only (kernel_area_x_constant; same, no default)
 DEFAULT_CONFIG: dict = {
     "model": "count_x_constant",
     "constants": {"default": 0.04, "wheat": 0.04, "sunflower": 0.05},
     "area_constants": {},
+    "kernel_area_constants": {},
 }
 
 

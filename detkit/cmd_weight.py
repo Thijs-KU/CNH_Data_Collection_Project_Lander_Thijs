@@ -92,6 +92,122 @@ def cmd_calibrate(a) -> int:
     return 0
 
 
+def cmd_features(a) -> int:
+    """Every feature against the measured weight: correlation table (+ bootstrap interval) and plots. The plots
+    work without weights too (then they show the value of each feature per photo)."""
+    import numpy as np
+
+    from .weight import SampleTable, feature_correlations, numeric_features
+
+    allp = _samples(a).for_crop(a.crop)
+    if not len(allp):
+        print(f"no photos{f' of crop {a.crop!r}' if a.crop else ''}")
+        return 1
+    usable = SampleTable([s for s in allp if s.weight_g is not None and s.weight_g > 0])
+    dropped = sum(1 for s in allp if s.weight_g is not None and s.weight_g <= 0)
+    n_piles = len({s.meta.get("pile_id") or s.file for s in allp})
+    print(f"{len(allp)} photos, {n_piles} piles, {len(usable)} with a weight > 0"
+          + (f" ({dropped} with weight <= 0 left out)" if dropped else "")
+          + (f", crop {a.crop}" if a.crop else ""))
+    res = feature_correlations(usable, crop=a.crop, n_boot=a.boot) if len(usable) >= 3 else []
+    feats = numeric_features(allp)
+    if res:
+        if a.boot:
+            print(f"bootstrap resamples whole piles ({a.boot} rounds)")
+        print(f"{'feature':24s} {'r':>7s} {'r2':>6s} {'slope':>12s}" + (f" {'95% CI of r':>17s}" if a.boot else ""))
+        for e in res:
+            ci = f" {_f(e['r_lo'], '{:+.3f}')} .. {_f(e['r_hi'], '{:+.3f}')}" if a.boot else ""
+            print(f"{e['feature']:24s} {e['r']:+7.3f} {e['r2']:6.3f} {e['slope']:12.4g}{ci}")
+        left = [k for k in feats if k not in {e["feature"] for e in res}]
+        if left:
+            print("no correlation (feature does not vary): " + ", ".join(left))
+    else:
+        print("no correlation: fewer than 3 photos with a weight > 0 (or the weights do not vary). "
+              "Values per photo:")
+        print(f"{'feature':24s} {'mean':>12s} {'std':>10s} {'min':>12s} {'max':>12s}")
+        for k in feats:
+            v = np.array([s.get(k) for s in allp], dtype=float)
+            print(f"{k:24s} {v.mean():12.5g} {v.std(ddof=1) if len(v) > 1 else 0.0:10.4g} {v.min():12.5g} {v.max():12.5g}")
+    if a.curve:
+        _curve(a, usable, feats)
+    if a.plot or a.plot_dir or a.show:
+        return _plots(a, allp, usable, {e["feature"]: e for e in res}, feats)
+    return 0
+
+
+def _curve(a, usable, feats: list[str]) -> None:
+    """``--curve FEATURE``: how r and the slope of weight against FEATURE settle as the number of photos grows."""
+    import numpy as np
+
+    from .weight import learning_curve
+
+    if a.curve not in feats:
+        print(f"--curve: {a.curve!r} is not a numeric feature of every photo; choose from: {', '.join(feats)}")
+        return
+    if len(usable) < 3:
+        print("learning curve: needs at least 3 photos with a weight > 0")
+        return
+    n = len(usable)
+    sizes = ([int(v) for v in a.sizes.split(",")] if a.sizes
+             else sorted({int(round(v)) for v in np.linspace(3, n, min(8, n - 2))}))
+    out = learning_curve(usable, a.curve, sizes, crop=a.crop, repeats=a.repeats)
+    if out is None:
+        print("learning curve: needs at least 3 photos with a weight > 0")
+        return
+    print(f"\nlearning curve of {a.curve}: r and slope in {a.repeats} random subsets of whole piles per size")
+    print(f"{'photos':>6s} {'piles':>6s} {'r mean':>8s} {'r 95% range':>17s} {'slope mean':>11s} {'slope 95% range':>25s}")
+    for e in out:
+        rr = f"{_f(e['r_lo'], '{:+.3f}')} .. {_f(e['r_hi'], '{:+.3f}')}"
+        sr = f"{_f(e['slope_lo'], '{:.3g}')} .. {_f(e['slope_hi'], '{:.3g}')}"
+        print(f"{e['n']:6d} {_f(e['n_piles'], '{:.1f}'):>6s} {_f(e['r_mean'], '{:+.3f}'):>8s} {rr:>17s} "
+              f"{_f(e['slope_mean'], '{:.3g}'):>11s} {sr:>25s}")
+    if not (a.plot or a.plot_dir or a.show):
+        return
+    try:
+        from .weight import plots as WP
+        plt = WP.pyplot(a.show)
+    except ImportError:
+        print("matplotlib is not installed: no curve plot (pip install matplotlib)")
+        return
+    fig = WP.learning_curve_figure(plt, out, a.curve, total=n, repeats=a.repeats)
+    if a.plot_dir:
+        print(f"wrote {WP.save(fig, Path(a.plot_dir) / f'learning_curve_{a.curve}.{a.format}')}")
+    elif a.plot:
+        pl = Path(a.plot)
+        print(f"wrote {WP.save(fig, pl.with_name(f'{pl.stem}_curve_{a.curve}.{a.format}'))}")
+    if not a.show:
+        plt.close(fig)
+
+
+def _plots(a, allp, usable, by_feat: dict, feats: list[str]) -> int:
+    """``--plot`` (one overview figure), ``--plot-dir`` (one figure per feature), ``--show`` (open the figures).
+    Piles (photos with the same ``pile_id``) get their own colour and marker; see detkit/weight/plots.py."""
+    try:
+        from .weight import plots as WP
+        plt = WP.pyplot(a.show)
+    except ImportError:
+        print("matplotlib is not installed: no plots (pip install matplotlib)")
+        return 0
+    styles = WP.pile_styles(allp, plt)
+    if a.plot:
+        fig = WP.overview_figure(plt, feats, allp, usable, by_feat, styles)
+        print(f"wrote {WP.save(fig, a.plot)}")
+        if not a.show:
+            plt.close(fig)
+    if a.plot_dir or (a.show and not a.plot):
+        for k in feats:
+            fig = WP.feature_figure(plt, k, allp, usable, by_feat.get(k), styles)
+            if a.plot_dir:
+                WP.save(fig, Path(a.plot_dir) / f"{k}.{a.format}")
+            if not a.show:
+                plt.close(fig)
+        if a.plot_dir:
+            print(f"wrote {len(feats)} plots to {a.plot_dir}")
+    if a.show:
+        plt.show()
+    return 0
+
+
 def register(sub) -> None:
     sp = sub.add_parser("weight", help="estimate weight from detections (count or area x constant)")
     ws = sp.add_subparsers(dest="weight_cmd", required=True)
@@ -106,10 +222,24 @@ def register(sub) -> None:
 
     p = ws.add_parser("predict", help="per-photo count and estimated weight (+ error vs balance)")
     common(p)
-    p.add_argument("--model", help="count_x_constant | area_x_constant (default: weight_config.json)")
+    p.add_argument("--model", help="count_x_constant | area_x_constant | kernel_area_x_constant (default: weight_config.json)")
     p.add_argument("--out", help="write CSV")
     p.set_defaults(fn=cmd_predict)
     p = ws.add_parser("calibrate", help="fit a model's constants on this project, save weight_config.json")
     common(p)
-    p.add_argument("--model", default="count_x_constant", choices=["count_x_constant", "area_x_constant"])
+    p.add_argument("--model", default="count_x_constant", choices=["count_x_constant", "area_x_constant", "kernel_area_x_constant"])
     p.set_defaults(fn=cmd_calibrate)
+    p = ws.add_parser("features", help="correlation of every feature with the measured weight (task 2)")
+    common(p)
+    p.add_argument("--crop", help="only photos of this crop")
+    p.add_argument("--boot", type=int, default=0, help="bootstrap rounds for the CI of r (0 = skip)")
+    p.add_argument("--plot", help="one PNG with a scatter plot of weight against every feature")
+    p.add_argument("--plot-dir", help="a folder with one larger PNG per feature")
+    p.add_argument("--show", action="store_true", help="open the plots in windows (needs a display)")
+    p.add_argument("--format", choices=["png", "pdf", "svg"], default="png",
+                   help="file type of the per-feature and curve plots (default png; pdf / svg for the report)")
+    p.add_argument("--curve", metavar="FEATURE", help="learning curve of this feature: how r and the slope settle "
+                   "as the number of photos grows (plot goes with --plot / --plot-dir)")
+    p.add_argument("--sizes", help="photo counts for --curve, comma separated (default: 8 steps up to all photos)")
+    p.add_argument("--repeats", type=int, default=200, help="random subsets per size for --curve")
+    p.set_defaults(fn=cmd_features)

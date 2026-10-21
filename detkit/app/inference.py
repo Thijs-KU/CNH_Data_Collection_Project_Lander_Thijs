@@ -94,9 +94,10 @@ def dominant_class(dets: list[dict]) -> str | None:
     return max(set(labels), key=labels.count) if labels else None
 
 
-def estimate_row(file: str, dets: list[dict], meta: dict, model: W.WeightModel, cfg: dict) -> dict:
-    """One results-table row: features -> model -> weight (+ error vs the measured weight)."""
-    feats = W.image_features(dets, meta)
+def estimate_row(file: str, dets: list[dict], meta: dict, model: W.WeightModel, cfg: dict, image=None) -> dict:
+    """One results-table row: features -> model -> weight (+ error vs the measured weight). ``image`` = the
+    preprocessed photo the boxes belong to; it adds the kernel-pixel features (kernel_area_x_constant)."""
+    feats = W.image_features(dets, meta, image)
     crop = meta.get("crop") or dominant_class(dets)
     per = ", ".join(f"{k[6:]} {v}" for k, v in feats.items() if k.startswith("count_")) or "-"
     row = {"file": file, "counts": per, "count": feats["count"], "total_area_px": round(feats["total_area_px"]),
@@ -201,7 +202,7 @@ def run_inference(paths: list[Path], per_photo: dict[str, dict], project, *, ckp
             continue
         if not meta.get("crop") and dets and len(project.classes) > 1:
             meta["crop"] = dominant_class(dets)
-        row = estimate_row(p.name, dets, meta, model, cfg)
+        row = estimate_row(p.name, dets, meta, model, cfg, p)
         rows.append(row)
         items.append({"path": str(p), "dets": dets, "meta": meta, "original": str(src), "norm": infos.get(p.name)})
         overlays.append(str(overlay(p, dets, project.classes, Path(cache) / f"{p.stem}_pred.jpg")))

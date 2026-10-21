@@ -5,8 +5,9 @@ import pytest
 
 from detkit.cli import main
 from detkit.project import Project
-from detkit.weight import (MODELS, AreaTimesConstant, CountTimesConstant, SampleTable, WeightModel,
-                           evaluate_model, get_model, image_features, load_config, save_config)
+from detkit.weight import (MODELS, AreaTimesConstant, CountTimesConstant, KernelAreaTimesConstant, SampleTable,
+                           WeightModel, evaluate_model, get_model, image_features, kernel_mask, load_config,
+                           save_config)
 
 
 def box(x, y, w=10, h=20, label="wheat"):
@@ -25,6 +26,56 @@ def test_image_features_empty_and_no_scale():
     f = image_features([])
     assert f["count"] == 0 and f["total_area_px"] == 0 and f["mean_area_px"] == 0
     assert "total_area_mm2" not in f
+
+
+def kernel_photo(discs, size=(120, 120), paper=(235, 235, 240), kernel=(40, 160, 230)):
+    """White-ish photo (BGR) with filled yellow discs [(cx, cy, r)]."""
+    import cv2
+    import numpy as np
+    img = np.full((size[1], size[0], 3), paper, np.uint8)
+    for cx, cy, r in discs:
+        cv2.circle(img, (cx, cy), r, kernel, -1)
+    return img
+
+
+def test_kernel_features_count_only_kernel_pixels():
+    img = kernel_photo([(30, 30, 10), (80, 70, 14)])
+    dets = [{"bbox": [10, 10, 50, 50], "score": 0.9, "label": "wheat"},       # 40x40 box around a r=10 disc
+            {"bbox": [60, 50, 100, 90], "score": 0.9, "label": "wheat"}]      # 40x40 box around a r=14 disc
+    f = image_features(dets, {"scale_mm_per_px": 0.5}, img)
+    truth = math.pi * (10 ** 2 + 14 ** 2)
+    assert f["total_area_px"] == 3200
+    assert f["kernel_area_px"] == pytest.approx(truth, rel=0.08)              # ~ the discs, not the boxes
+    assert f["kernel_area_px"] < 0.35 * f["total_area_px"]
+    assert f["kernel_fill_ratio"] == pytest.approx(f["kernel_area_px"] / 3200)
+    assert f["mean_kernel_area_px"] == pytest.approx(f["kernel_area_px"] / 2, rel=0.05)
+    assert f["kernel_area_mm2"] == pytest.approx(f["kernel_area_px"] * 0.25)
+    assert "kernel_area_px" not in image_features(dets)                        # no image -> old behaviour
+
+
+def test_kernel_mask_overlapping_boxes_count_once_and_edge_cases():
+    img = kernel_photo([(50, 50, 12)])
+    box_a, box_b = [30, 30, 70, 70], [40, 40, 80, 80]                          # overlap on the same kernel
+    one, _ = kernel_mask(img, [box_a])
+    both, areas = kernel_mask(img, [box_a, box_b])
+    assert both.sum() == pytest.approx(one.sum(), rel=0.05) and len(areas) == 2   # counted once, not twice
+    assert kernel_mask(img, [])[0].sum() == 0
+    assert kernel_mask(img, [[5, 5, 5, 20]])[1] == [0]                         # empty box
+    assert kernel_mask(kernel_photo([]), [[10, 10, 50, 50]])[0].sum() == 0    # empty paper
+
+
+def test_kernel_area_model_and_table(tmp_path):
+    p = make_project(tmp_path)
+    import cv2
+    p.photos_dir.mkdir(parents=True, exist_ok=True)
+    for rec in p.store().load_coco()["images"]:
+        cv2.imwrite(str(p.photos_dir / rec["file_name"]), kernel_photo([(5, 10, 4)], size=(200, 40)))
+    t = SampleTable.from_project(p).with_weight()
+    assert all("kernel_area_px" in s.features for s in t)
+    m = KernelAreaTimesConstant().fit(t)
+    s = t.rows[0]
+    assert m.predict(s.features, s.crop).weight_g == pytest.approx(s.features["kernel_area_px"] * m.constants[s.crop])
+    assert all("kernel_area_px" not in s.features for s in SampleTable.from_project(p, kernel_area=False))
 
 
 def make_project(tmp_path, n_per=(2, 4, 6, 8)):
@@ -78,7 +129,7 @@ def test_count_times_constant(tmp_path):
 
 
 def test_area_times_constant(tmp_path):
-    assert set(MODELS) == {"count_x_constant", "area_x_constant"}
+    assert set(MODELS) == {"count_x_constant", "area_x_constant", "kernel_area_x_constant"}
     m = AreaTimesConstant()
     with pytest.raises(ValueError, match="calibrate"):                  # no default: camera-dependent
         m.predict({"total_area_px": 100}, "wheat")

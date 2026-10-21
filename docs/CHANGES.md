@@ -8,6 +8,68 @@ headless-browser run of the app on Gradio 6.28); not run on the Windows `.venv`,
 
 ---
 
+## 2026-10-21 (2): task 2 statistics: feature correlations, `bootstrap_ci`, `learning_curve`
+
+**Why.** Task 2 asks which feature follows the measured weight best and how sure and how many samples that needs.
+The comparison of the features had no code, and `bootstrap_ci` / `learning_curve` were stubs.
+
+* `detkit/weight/stats.py`:
+  * `feature_correlations(samples, crop, features, n_boot)`: per numeric feature r, r², least-squares slope and
+    intercept (+ bootstrap interval of r), best first. Features that do not vary are left out.
+  * `bootstrap_ci(samples, x_key, ..., stat="r"|"slope", n_boot, alpha, seed)`: percentile bootstrap that resamples
+    whole piles (`pile_id`; a photo without one is its own pile), because photos of one pile are not independent;
+    resampling photos would give too narrow an interval. `None` with fewer than 3 weighed photos or 2 piles.
+  * `learning_curve(samples, x_key, sizes, ..., repeats, seed)`: per size, random subsets of whole piles; mean, std
+    and central 95 % range of r and of the slope over the repeats. At the full size the spread is 0 by construction.
+  * A feature that is constant up to rounding error gives r = NaN (not a warning from `polyfit`).
+* `detkit weight features --workdir W [--crop C] [--boot N] [--plot PNG] [--plot-dir DIR] [--show]`: the table above
+  and plots. `--plot` = one overview PNG, `--plot-dir` = one larger PNG per feature, `--show` = open the figures.
+  Points are coloured by pile; with weights each plot shows the weight against the feature, the free least-squares
+  line and the line through the origin (the one `weight = feature x constant` uses, its slope is the constant).
+  The plots do not need weights or a correlation: with fewer than 3 photos with a weight > 0, or for a feature that
+  does not vary, the plot shows the value of the feature for every photo (mean marked) and the console prints
+  mean / std / min / max per feature. Weights <= 0 are left out (and reported).
+* `--curve FEATURE [--sizes 5,10,20] [--repeats N]`: prints and plots (with `--plot` / `--plot-dir`) the learning
+  curve of that feature: r and slope against the number of photos, mean and 95 % range over random subsets of whole
+  piles. Read the width of the band, not the value of r: it has settled when the band stops shrinking.
+* Plots for the report (`detkit/weight/plots.py`, new): **every pile has its own colour and marker** (photos of one
+  pile share both; a legend lists the piles and their photo count; a photo without `pile_id` is a pile of its own).
+  Photos of one pile have the same weight, so they sit in one horizontal row; the hollow diamond is the pile mean.
+  Titles carry r, its interval, R² and the numbers of photos and piles; axes carry units (kernels, px², mm²).
+  Without weights the plot groups the photos by pile and prints the spread within a pile (photographing / detector
+  noise, % of the mean) against the spread between piles. The learning curve has three panels (r, slope, width of
+  the 95 % range of r), every size labelled with its photos and piles, the full-size point drawn as a reference
+  instead of a band (it has no spread by construction). `--format png|pdf|svg` for the per-feature and curve plots.
+* `numeric_features(samples)` (stats.py): the feature keys every photo has as a number.
+* Tests: `tests/test_weight_stats.py` (ranking, pile-wise vs photo-wise intervals, reproducibility, curve settles,
+  edge cases, CLI); the three task 2 checks in `tests/test_student_tasks.py` now run and pass instead of skipping.
+* Not done: `propagate` and the `low_g` / `high_g` bounds (task 3).
+
+---
+
+## 2026-10-21: kernel-pixel area feature (`kernel_area_x_constant`)
+
+**Why.** The box features (width, height, box area) depend on how the kernels lie. A box can only be drawn along the
+image axes, so a kernel lying diagonally gets a much larger box than the same kernel lying straight (at 45 degrees
+roughly twice the area), while its real size is the same. A pile with more diagonal kernels therefore gets a bigger
+box area without containing more popcorn, which adds noise to the weight estimate. Counting only the pixels that really
+are kernel does not depend on the orientation: a kernel covers the same number of pixels whichever way it points.
+
+* `detkit/weight/features.py`: `kernel_mask(image, bboxes)` finds the pixels inside the boxes that are kernel (colour
+  distance to the paper, Otsu inside/around the boxes, per-box close + largest blob + convex hull; overlapping boxes
+  count once). `image_features(detections, meta, image=None)` adds `kernel_area_px`, `mean_kernel_area_px`,
+  `median_kernel_area_px`, `kernel_fill_ratio` (+ `kernel_area_mm2`, `mean_kernel_area_mm2` with a scale) when given
+  the preprocessed photo; without `image` nothing changes. `SampleTable.add(..., image=)`; `from_project` reads
+  `<workdir>/photos/<file>` (`kernel_area=False` skips).
+* `detkit/weight/models.py`: `KernelAreaTimesConstant` (`kernel_area_x_constant`, constants in
+  `kernel_area_constants` of `weight_config.json`); `detkit weight calibrate|predict` accept it.
+* Inference tab: `estimate_row(..., image)` gets the prepared photo, so the model can be chosen there. The constants
+  table in the tab still has only the count and box-area columns: calibrate this one with `detkit weight calibrate`.
+* On the 4 sample photos the kernel pixels are about 70 % of the box area (fill ratio 0.69 to 0.73).
+* Tests: `tests/test_weight.py` (synthetic discs, overlapping boxes, empty cases, table + model).
+
+---
+
 ## 2026-10-20 (3): detection defaults: score 0.2, tile 1150
 
 * `detkit/project.py`: `DEFAULT_SCORE = 0.2`, `DEFAULT_TILE = 1150` (px).

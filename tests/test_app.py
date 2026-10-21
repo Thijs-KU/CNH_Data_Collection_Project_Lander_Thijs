@@ -264,7 +264,7 @@ def test_estimate_row_baseline_todo_and_error():
     assert "cost" not in row
     uncal = I.estimate_row("a.jpg", dets, {"crop": "wheat"}, I.load_weight_model("/x", "area_x_constant", cfg), cfg)
     assert uncal["weight_g"] is None and "calibrate" in uncal["note"] and uncal["count"] == 5
-    assert [n for _, n in I.model_choices()] == ["count_x_constant", "area_x_constant"]
+    assert [n for _, n in I.model_choices()] == ["count_x_constant", "area_x_constant", "kernel_area_x_constant"]
 
 
 def test_results_csv():
