@@ -16,6 +16,13 @@ def _samples(a, use: str | None = None):
                                     reviewed_only=getattr(a, "reviewed_only", False))
 
 
+def _under_workdir(a, path) -> Path:
+    """Output paths: absolute ones as given, relative ones inside ``<workdir>/reports`` (so every result of a
+    project stays in its work directory, whatever the current folder is)."""
+    pth = Path(path)
+    return pth if pth.is_absolute() else Path(a.workdir) / "reports" / pth
+
+
 def _f(v, fmt="{:.3f}") -> str:
     return "-" if v is None else fmt.format(v)
 
@@ -99,6 +106,10 @@ def cmd_features(a) -> int:
 
     from .weight import SampleTable, feature_correlations, numeric_features
 
+    if a.plot:
+        a.plot = str(_under_workdir(a, a.plot))
+    if a.plot_dir:
+        a.plot_dir = str(_under_workdir(a, a.plot_dir))
     allp = _samples(a).for_crop(a.crop)
     if not len(allp):
         print(f"no photos{f' of crop {a.crop!r}' if a.crop else ''}")
@@ -130,14 +141,22 @@ def cmd_features(a) -> int:
         sd = v.std(ddof=1) if len(v) > 1 else 0.0
         print(f"{k:24s} {v.min():11.5g} {np.median(v):11.5g} {v.mean():11.5g} {np.percentile(v, 95):11.5g} "
               f"{v.max():11.5g} {sd:10.4g}")
+    if not (a.plot or a.plot_dir or a.show or a.no_plots):
+        # default: figures next to the other results of the project
+        a.plot_dir = str(Path(a.workdir) / "reports" / "features")
+        a.plot = str(Path(a.plot_dir) / f"overview.{a.format}")
     if a.curve:
         _curve(a, usable, feats)
+    elif not a.no_plots and len(usable) >= 3:
+        # no --curve: still draw the learning curve of every feature (figures only, no tables)
+        a.curve = "all"
+        _curve(a, usable, feats, quiet=True)
     if a.plot or a.plot_dir or a.show:
         return _plots(a, allp, usable, {e["feature"]: e for e in res}, feats)
     return 0
 
 
-def _curve(a, usable, feats: list[str]) -> None:
+def _curve(a, usable, feats: list[str], quiet: bool = False) -> None:
     """``--curve FEATURE[,FEATURE...]|all``: how r and the slope settle as the number of photos grows. Prints a table
     per feature and always saves the figures (default folder ``<workdir>/reports/features``)."""
     import numpy as np
@@ -161,9 +180,12 @@ def _curve(a, usable, feats: list[str]) -> None:
     for k in names:
         out = learning_curve(usable, k, sizes, crop=a.crop, repeats=a.repeats)
         if out is None or all(e["r_mean"] is None for e in out):
-            print(f"\nlearning curve of {k}: no correlation (the feature does not vary)")
+            if not quiet:
+                print(f"\nlearning curve of {k}: no correlation (the feature does not vary)")
             continue
         curves[k] = out
+        if quiet:
+            continue
         print(f"\nlearning curve of {k}: r and slope in {a.repeats} random subsets of whole piles per size")
         print(f"{'photos':>6s} {'piles':>6s} {'r mean':>8s} {'r 95% range':>17s} {'slope mean':>11s} {'slope 95% range':>25s}")
         for e in out:
@@ -226,6 +248,46 @@ def _plots(a, allp, usable, by_feat: dict, feats: list[str]) -> int:
     return 0
 
 
+def cmd_kernels(a) -> int:
+    """Example figures of the kernel-pixel feature: the pixels counted inside the boxes, for the report."""
+    import cv2
+
+    from .weight import plots as WP
+
+    proj = Project.load(a.workdir)
+    store = proj.store()
+    if a.use == "predictions" or a.predictions:
+        import json
+        pf = Path(a.predictions or proj.workdir / "predictions" / "predictions.json")
+        data = {Path(k).name: v.get("detections", []) for k, v in json.loads(pf.read_text(encoding="utf-8")).items()}
+        get = lambda f: data[f]                                              # noqa: E731
+        files = list(data)
+    else:
+        files = [i["file_name"] for i in store.load_coco()["images"]]
+        get = lambda f: store.get_image(f)[0]                                # noqa: E731
+    if a.files:
+        want = {Path(x).name for x in a.files}
+        files = [f for f in files if f in want]
+    files = [f for f in files if (proj.photos_dir / f).exists() and get(f)]
+    if not files:
+        print("no photos with boxes to show")
+        return 1
+    if not a.files and len(files) > a.n:
+        step = len(files) / a.n
+        files = [files[int(i * step)] for i in range(a.n)]
+    plt = WP.pyplot(a.show)
+    out = _under_workdir(a, a.out or "kernels")
+    for f in files:
+        bgr = cv2.imread(str(proj.photos_dir / f))
+        fig = WP.kernel_examples_figure(plt, bgr, [d["bbox"] for d in get(f)], title=f, n_zoom=a.zoom)
+        print(f"wrote {WP.save(fig, out / (Path(f).stem + '_kernels.' + a.format))}")
+        if not a.show:
+            plt.close(fig)
+    if a.show:
+        plt.show()
+    return 0
+
+
 def register(sub) -> None:
     sp = sub.add_parser("weight", help="estimate weight from detections (count or area x constant)")
     ws = sp.add_subparsers(dest="weight_cmd", required=True)
@@ -247,12 +309,23 @@ def register(sub) -> None:
     common(p)
     p.add_argument("--model", default="count_x_constant", choices=["count_x_constant", "area_x_constant", "kernel_area_x_constant"])
     p.set_defaults(fn=cmd_calibrate)
+    p = ws.add_parser("kernels", help="example figures of the kernel-pixel feature (boxes vs kernel pixels)")
+    common(p)
+    p.add_argument("files", nargs="*", help="photo file names (default: --n photos spread over the project)")
+    p.add_argument("--n", type=int, default=3, help="how many photos when none are named")
+    p.add_argument("--zoom", type=int, default=8, help="close-ups of single kernels per photo")
+    p.add_argument("--out", help="folder for the figures (default <workdir>/reports/kernels; a relative name is inside <workdir>/reports)")
+    p.add_argument("--format", choices=["png", "pdf", "svg"], default="png")
+    p.add_argument("--show", action="store_true", help="open the figures in windows")
+    p.set_defaults(fn=cmd_kernels)
     p = ws.add_parser("features", help="correlation of every feature with the measured weight (task 2)")
     common(p)
     p.add_argument("--crop", help="only photos of this crop")
     p.add_argument("--boot", type=int, default=0, help="bootstrap rounds for the CI of r (0 = skip)")
-    p.add_argument("--plot", help="one PNG with a scatter plot of weight against every feature")
-    p.add_argument("--plot-dir", help="a folder with one larger PNG per feature")
+    p.add_argument("--plot", help="one overview figure with every feature (default <workdir>/reports/features/overview.png)")
+    p.add_argument("--plot-dir", help="folder with one larger figure per feature (default <workdir>/reports/features)")
+    p.add_argument("--no-plots", action="store_true", help="tables only (by default the figures are saved in "
+                   "<workdir>/reports/features)")
     p.add_argument("--show", action="store_true", help="open the plots in windows (needs a display)")
     p.add_argument("--format", choices=["png", "pdf", "svg"], default="png",
                    help="file type of the per-feature and curve plots (default png; pdf / svg for the report)")

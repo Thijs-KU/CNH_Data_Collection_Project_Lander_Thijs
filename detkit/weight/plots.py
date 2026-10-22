@@ -270,6 +270,63 @@ def curves_overview_figure(plt, curves: dict, total: int, repeats: int, cols: in
     return fig
 
 
+def kernel_examples_figure(plt, bgr, bboxes, title: str = "", n_zoom: int = 8, pad: int = 6):
+    """One photo with its boxes and the kernel pixels found inside them, plus close-ups of single kernels.
+
+    Left: the whole photo, boxes in blue, kernel pixels tinted green. Right: ``n_zoom`` kernels cut out of the photo
+    (the ones whose box is least filled first, i.e. the diagonal ones, then the most filled and the median one),
+    each with the box (blue) and the outline of the kernel pixels (green) and the numbers in the title.
+    """
+    import cv2
+    import numpy as np
+
+    from .features import kernel_mask
+
+    mask, areas = kernel_mask(bgr, bboxes)
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    H, W = rgb.shape[:2]
+    box_area = [max(0.0, (b[2] - b[0]) * (b[3] - b[1])) for b in bboxes]
+    fill = [a / ba if ba > 0 else np.nan for a, ba in zip(areas, box_area)]
+    order = [i for i in np.argsort(fill) if not np.isnan(fill[i])]
+    k = min(n_zoom, len(order))
+    low = order[:max(0, k - 3)]
+    pick = list(low) + ([order[-1]] if k > len(low) else []) + ([order[len(order) // 2]] if k > len(low) + 1 else [])
+    pick = list(dict.fromkeys(pick))[:k]
+    with plt.rc_context(RC):
+        cols = 4
+        rows = max(1, -(-len(pick) // cols))
+        fig = plt.figure(figsize=(15, 5.2 + 1.0 * max(0, rows - 1)))
+        gs = fig.add_gridspec(rows, cols + 3, wspace=0.25, hspace=0.45)
+        ax = fig.add_subplot(gs[:, :3])
+        shown = rgb.copy()
+        shown[mask] = (0.45 * shown[mask] + 0.55 * np.array([0, 200, 60])).astype(np.uint8)
+        ax.imshow(shown)
+        for x1, y1, x2, y2 in bboxes:
+            ax.add_patch(plt.Rectangle((x1, y1), x2 - x1, y2 - y1, fill=False, ec="#1f77b4", lw=0.8))
+        tot_box, tot_k = sum(box_area), int(sum(areas))
+        ax.set_title(f"{title}  -  {len(bboxes)} kernels: box area {tot_box:.0f} px, kernel pixels {tot_k} px "
+                     f"({100 * tot_k / tot_box:.0f} %)" if tot_box else title, fontsize=10, loc="left")
+        ax.axis("off")
+        ax.grid(False)
+        for j, i in enumerate(pick):
+            a2 = fig.add_subplot(gs[j // cols, 3 + j % cols])
+            x1, y1, x2, y2 = (int(round(v)) for v in bboxes[i])
+            cx1, cy1, cx2, cy2 = max(0, x1 - pad), max(0, y1 - pad), min(W, x2 + pad), min(H, y2 + pad)
+            a2.imshow(rgb[cy1:cy2, cx1:cx2], extent=(cx1, cx2, cy2, cy1))
+            m = mask[cy1:cy2, cx1:cx2].astype(float)
+            if m.any():
+                a2.contour(np.arange(cx1, cx2) + 0.5, np.arange(cy1, cy2) + 0.5, m, levels=[0.5],
+                           colors="#00c83c", linewidths=1.4)
+            a2.add_patch(plt.Rectangle((x1, y1), x2 - x1, y2 - y1, fill=False, ec="#1f77b4", lw=1.4))
+            a2.set_title(f"box {box_area[i]:.0f} px, kernel {areas[i]} px\n{100 * fill[i]:.0f} % of the box",
+                         fontsize=8)
+            a2.axis("off")
+            a2.grid(False)
+        fig.suptitle("Blue: detection box (axis aligned). Green: kernel pixels found inside it "
+                     "(paper background removed).", fontsize=10, y=0.99)
+    return fig
+
+
 def save(fig, path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

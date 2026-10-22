@@ -175,3 +175,67 @@ def test_plots_piles_get_their_own_colour_and_marker():
     assert "within a pile" in txt and "between piles" in txt
     assert "no within-pile" in WP.spread_text(WP._groups(rows[::2]), "count")                 # one photo per pile
     assert WP.unit_of("kernel_area_px") == "px²" and WP.unit_of("count") == "kernels" and WP.unit_of("mean_diag_px") == "px"
+
+
+def test_kernels_cli(tmp_path, capsys):
+    import cv2
+    from detkit.project import Project
+    p = Project(workdir=tmp_path, classes=["wheat"])
+    p.save()
+    p.photos_dir.mkdir(parents=True, exist_ok=True)
+    img = np.full((200, 300, 3), 230, np.uint8)
+    boxes = []
+    for j in range(5):
+        cv2.ellipse(img, (30 + j * 50, 100), (14, 8), 40, 0, 360, (40, 150, 220), -1)
+        boxes.append({"bbox": [16 + j * 50, 86, 44 + j * 50, 114], "class": "wheat"})
+    cv2.imwrite(str(p.photos_dir / "a.jpg"), img)
+    p.store().upsert_image("a.jpg", 300, 200, boxes, {"crop": "wheat"}, reviewed=True)
+    assert main(["weight", "kernels", "--workdir", str(tmp_path), "--zoom", "4"]) == 0
+    assert (tmp_path / "reports" / "kernels" / "a_kernels.png").stat().st_size > 1000
+    assert "wrote" in capsys.readouterr().out
+
+
+def test_features_default_saves_figures_and_curves(tmp_path, capsys):
+    from detkit.project import Project
+    p = Project(workdir=tmp_path, classes=["wheat"])
+    p.save()
+    st = p.store()
+    rng = np.random.default_rng(1)
+    for i in range(12):
+        k = int(rng.integers(5, 40))
+        st.upsert_image(f"w{i}.jpg", 1000, 1000, [{"bbox": [j * 20, 0, j * 20 + 10, 20], "class": "wheat"}
+                                                  for j in range(k)],
+                        {"crop": "wheat", "total_weight_g": 0.05 * k * (1 + rng.normal(0, 0.1)),
+                         "pile_id": str(i // 2)}, reviewed=True)
+    assert main(["weight", "features", "--workdir", str(tmp_path)]) == 0
+    rep = tmp_path / "reports" / "features"
+    for f in ("overview.png", "count.png", "learning_curve_count.png", "learning_curve_all.png"):
+        assert (rep / f).stat().st_size > 1000
+    assert "learning curve of" not in capsys.readouterr().out
+    import shutil
+    shutil.rmtree(rep)
+    assert main(["weight", "features", "--workdir", str(tmp_path), "--no-plots"]) == 0
+    assert not rep.exists()
+
+
+def test_features_relative_plot_paths_stay_in_workdir(tmp_path, monkeypatch):
+    from detkit.project import Project
+    wd = tmp_path / "wd"
+    p = Project(workdir=wd, classes=["wheat"])
+    p.save()
+    st = p.store()
+    rng = np.random.default_rng(2)
+    for i in range(8):
+        k = int(rng.integers(5, 40))
+        st.upsert_image(f"w{i}.jpg", 1000, 1000, [{"bbox": [j * 20, 0, j * 20 + 10, 20], "class": "wheat"}
+                                                  for j in range(k)],
+                        {"crop": "wheat", "total_weight_g": 0.05 * k * (1 + rng.normal(0, 0.1)),
+                         "pile_id": str(i // 2)}, reviewed=True)
+    cwd = tmp_path / "elsewhere"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    assert main(["weight", "features", "--workdir", str(wd), "--plot-dir", "fp", "--plot", "all.png"]) == 0
+    assert (wd / "reports" / "fp" / "learning_curve_count.png").exists()
+    assert (wd / "reports" / "fp" / "count.png").exists()
+    assert (wd / "reports" / "all.png").exists()
+    assert not list(cwd.iterdir())

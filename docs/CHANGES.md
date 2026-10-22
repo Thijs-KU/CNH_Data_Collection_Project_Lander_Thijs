@@ -14,6 +14,12 @@ headless-browser run of the app on Gradio 6.28); not run on the Windows `.venv`,
 showed min / mean / std / max) was only printed when there was no correlation.
 
 * A table of every feature over all photos is now always printed: min, median, mean, p95, max, std.
+* `weight features` now saves the figures (overview + one per feature) in `<workdir>/reports/features` when no plot option
+  is given, together with the learning curve of every feature; `--no-plots` gives tables only.
+  Relative `--plot` / `--plot-dir` / `--out` paths are now placed inside `<workdir>/reports`, so figures never end up
+  in the folder the command was started from.
+* New `python -m detkit weight kernels`: example figures of the kernel-pixel feature (photo with boxes and kernel pixels
+  plus close-ups of single kernels), for the report. Test: `test_kernels_cli`.
 * New `docs/CHEATSHEET_FEATURES.md`: all options, output locations and example commands of `weight features`.
 * `--curve` now always draws the learning curve (before, only together with `--plot` / `--plot-dir`): saved in
   `--plot-dir`, next to `--plot`, or else in `<workdir>/reports/features`. `--curve a,b` or `--curve all` handles

@@ -60,12 +60,22 @@ python -m detkit weight features --workdir $W --boot 1000 --curve kernel_area_px
 | `--crop C` | only photos of this crop |
 | `--boot N` | adds the 95 % bootstrap interval of r (N rounds, 0 = off) |
 | `--curve FEATURE` | learning curve of that feature, several comma separated or `all` (`--sizes 5,10,20`, `--repeats 200`); always plotted: in `--plot-dir`, next to `--plot`, else in `<workdir>/reports/features`; with several features also a comparison figure `learning_curve_all` |
-| `--plot FILE` | one overview figure with every feature |
+| `--plot FILE` | one overview figure with every feature (a relative name is placed inside `<workdir>/reports`, an absolute path is used as given) |
+| `--no-plots` | tables only; otherwise (also without `--curve`) the figures are saved: `overview`, one per feature and the learning curve of every feature (`learning_curve_<feature>`, `learning_curve_all`), by default in `<workdir>/reports/features` |
 | `--plot-dir DIR` | one larger figure per feature (+ `learning_curve_<feature>` with `--curve`) |
 | `--format` | file type for `--plot-dir` and the curve: `png` (default), `pdf`, `svg` |
 | `--show` | open the figures in windows (needs a display) |
 
 Short version of all options and commands: [CHEATSHEET_FEATURES.md](CHEATSHEET_FEATURES.md).
+
+**Example figures of the kernel pixels (for the report).**
+```bash
+python -m detkit weight kernels --workdir $W --n 3 [--zoom 8] [--format pdf] [--out DIR]
+python -m detkit weight kernels --workdir $W Sample10_0.jpeg      # named photos
+```
+One figure per photo in `<workdir>/reports/kernels/<photo>_kernels.<format>`: left the whole photo with the boxes (blue)
+and the kernel pixels (green) and the total box area against kernel pixels; right close-ups of single kernels with box,
+kernel outline and both areas (the least filled boxes, i.e. diagonal kernels, first, then the fullest and a median one).
 
 **Table.** For every numeric feature: r, r², the least-squares slope and (`--boot`) the interval of r, best first.
 A second table always follows (also without weights): min, median, mean, p95, max and std of every feature over all

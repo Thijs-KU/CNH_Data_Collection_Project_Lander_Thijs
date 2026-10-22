@@ -20,11 +20,12 @@ More explanation: [WEIGHT.md](WEIGHT.md) (section "Feature statistics and plots"
 | `--reviewed-only` | only photos marked reviewed |
 | `--crop C` | only photos of this crop |
 | `--boot N` | 95 % bootstrap interval of r by resampling piles (0 = off) |
-| `--plot FILE` | one overview figure with every feature |
-| `--plot-dir DIR` | one larger figure per feature |
+| `--plot FILE` | one overview figure with every feature (relative names end up in `$W/reports/`, absolute paths as given) |
+| `--no-plots` | tables only (by default overview, per-feature figures and learning curves of every feature are saved in `$W/reports/features`) |
+| `--plot-dir DIR` | one larger figure per feature, plus the learning curves (relative names end up in `$W/reports/`) |
 | `--format png\|pdf\|svg` | file type of the figures (default png) |
 | `--show` | open the figures in windows (needs a display) |
-| `--curve F` | learning curve of feature `F`; `a,b` for several, `all` for every feature. Always plotted |
+| `--curve F` | learning curve of feature `F`; `a,b` for several, `all` for every feature. Adds the curve table to the output. Without it the curve figures of every feature are still saved (no table) |
 | `--sizes 5,10,20` | photo counts for `--curve` (default: 8 steps up to all photos) |
 | `--repeats N` | random subsets per size for `--curve` (default 200) |
 
@@ -32,21 +33,24 @@ More explanation: [WEIGHT.md](WEIGHT.md) (section "Feature statistics and plots"
 
 | Figure | Location |
 |---|---|
-| overview | the `--plot` file |
-| per feature | `--plot-dir/<feature>.<format>` |
+| overview | the `--plot` file, else `$W/reports/features/overview.<format>` |
+| per feature | `--plot-dir/<feature>.<format>`, else `$W/reports/features/` |
 | learning curve | `--plot-dir`, else next to `--plot`, else `$W/reports/features` (`learning_curve_<feature>`, `learning_curve_all` for several) |
 
 ## Common commands
 
 ```bash
-# tables only
+# tables + figures in $W/reports/features (overview, one per feature, learning curves)
 python -m detkit weight features --workdir $W
+
+# tables only
+python -m detkit weight features --workdir $W --no-plots
 
 # with confidence interval of r
 python -m detkit weight features --workdir $W --boot 1000
 
 # all feature plots for the report
-python -m detkit weight features --workdir $W --boot 1000 --plot all.png --plot-dir feature_plots
+python -m detkit weight features --workdir $W --boot 1000 --plot all.png --plot-dir feature_plots     # -> $W/reports/all.png, $W/reports/feature_plots/
 
 # learning curve of one feature / a few / all
 python -m detkit weight features --workdir $W --curve kernel_area_px
@@ -59,6 +63,14 @@ python -m detkit weight features --workdir $W --plot-dir feature_plots --format 
 # one crop, predicted boxes
 python -m detkit weight features --workdir $W --crop wheat --use predictions
 ```
+
+## Kernel-pixel example figures (separate command)
+
+```bash
+python -m detkit weight kernels --workdir $W --n 3            # 3 photos -> $W/reports/kernels/
+python -m detkit weight kernels --workdir $W --format pdf Sample10_0.jpeg
+```
+Options: `--n`, `--zoom` (close-ups per photo), `--out DIR`, `--format`, `--show`, `--use predictions`.
 
 ## Reading the results
 
