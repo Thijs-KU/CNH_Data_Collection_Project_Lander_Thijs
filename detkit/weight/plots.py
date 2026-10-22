@@ -237,6 +237,39 @@ def learning_curve_figure(plt, out: list[dict], feat: str, total: int, repeats: 
     return fig
 
 
+def curves_overview_figure(plt, curves: dict, total: int, repeats: int, cols: int = 3):
+    """The learning curves of several features side by side (r with its 95 % range), same scale, to compare them."""
+    names = list(curves)
+    rows_n = max(1, -(-len(names) // cols))
+    with plt.rc_context(RC):
+        fig, axes = plt.subplots(rows_n, cols, figsize=(5.4 * cols, 3.9 * rows_n + 0.4), squeeze=False, sharey=True)
+        for ax, k in zip(axes.ravel(), names):
+            ok = [e for e in curves[k] if e["r_mean"] is not None]
+            at = {e["n"]: i for i, e in enumerate(ok)}
+            part = [e for e in ok if e["n"] < total]
+            full = [e for e in ok if e["n"] >= total]
+            pos = [at[e["n"]] for e in part]
+            if part:
+                ax.fill_between(pos, [e["r_lo"] for e in part], [e["r_hi"] for e in part], alpha=0.25, color="C0")
+                ax.plot(pos, [e["r_mean"] for e in part], "o-", color="C0", ms=4)
+            if full:
+                ax.axhline(full[0]["r_mean"], color="k", ls="--", lw=1)
+                ax.plot([at[full[0]["n"]]], [full[0]["r_mean"]], "o", mfc="white", mec="k", ms=7, zorder=5)
+            ax.set_title(k, fontsize=10, loc="left")
+            ax.set_xticks(range(len(ok)))
+            ax.set_xticklabels([f"{e['n']}\n{e['n_piles']:.0f}p" if e.get("n_piles") else str(e["n"]) for e in ok],
+                               fontsize=7)
+            ax.set_ylim(-1.05, 1.05)
+            ax.set_ylabel("correlation r")
+            ax.set_xlabel("photos / piles (p)")
+        for ax in axes.ravel()[len(names):]:
+            ax.axis("off")
+        fig.suptitle(f"Learning curves of the features: mean r and the 95 % range of {repeats} random subsets of whole "
+                     f"piles (dashed / hollow = all {total} photos)", fontsize=10)
+        fig.tight_layout()
+    return fig
+
+
 def save(fig, path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -103,7 +103,8 @@ def test_features_cli(tmp_path, capsys):
     out = capsys.readouterr().out
     assert (tmp_path / "all.png").stat().st_size > 1000
     assert (tmp_path / "per" / "total_area_px.png").exists() and (tmp_path / "per" / "count.png").exists()
-    assert "8 photos, 4 piles, 8 with a weight > 0" in out and "total_area_px" in out and "95% CI of r" in out
+    assert "8 photos, 4 piles, 8 with a weight > 0" in out
+    assert "p95" in out and "median" in out                              # the value table is always there and "total_area_px" in out and "95% CI of r" in out
     assert main(["weight", "features", "--workdir", str(tmp_path), "--crop", "sunflower"]) == 1
     assert main(["weight", "features", "--workdir", str(tmp_path), "--format", "pdf", "--curve", "count",
                  "--plot-dir", str(tmp_path / "pdf")]) == 0
@@ -126,6 +127,7 @@ def test_features_cli_plots_without_any_weight(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "5 photos" in out and "0 with a weight > 0 (1 with weight <= 0 left out)" in out
     assert "no correlation" in out and "total_area_px" in out
+    assert "p95" in out and "median" in out                              # the value table is there without weights too
     assert (tmp_path / "all.png").stat().st_size > 1000
     assert (tmp_path / "per" / "total_area_px.png").exists() and (tmp_path / "per" / "mean_diag_px.png").exists()
 
@@ -150,6 +152,12 @@ def test_features_cli_learning_curve(tmp_path, capsys):
     rows = [ln for ln in out.splitlines() if ln.split() and ln.split()[0] in ("4", "8", "12") and ".." in ln]
     assert len(rows) == 3
     assert (tmp_path / "per" / "learning_curve_count.png").stat().st_size > 1000
+    # without any plot option the curves are still drawn (default folder), several features at once
+    assert main(base + ["--curve", "count,total_area_px", "--sizes", "4,8,12", "--repeats", "20"]) == 0
+    capsys.readouterr()
+    rep = tmp_path / "reports" / "features"
+    for f in ("learning_curve_count.png", "learning_curve_total_area_px.png", "learning_curve_all.png"):
+        assert (rep / f).stat().st_size > 1000
     assert main(base + ["--curve", "nope"]) == 0
     assert "not a numeric feature" in capsys.readouterr().out
 

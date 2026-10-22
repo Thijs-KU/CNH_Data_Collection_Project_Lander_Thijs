@@ -8,6 +8,20 @@ headless-browser run of the app on Gradio 6.28); not run on the Windows `.venv`,
 
 ---
 
+## 2026-10-21 (3): `weight features`: value table
+
+**Why.** With weights the command only printed r and the slope; the distribution of each feature (the table that
+showed min / mean / std / max) was only printed when there was no correlation.
+
+* A table of every feature over all photos is now always printed: min, median, mean, p95, max, std.
+* New `docs/CHEATSHEET_FEATURES.md`: all options, output locations and example commands of `weight features`.
+* `--curve` now always draws the learning curve (before, only together with `--plot` / `--plot-dir`): saved in
+  `--plot-dir`, next to `--plot`, or else in `<workdir>/reports/features`. `--curve a,b` or `--curve all` handles
+  several features and also writes one comparison figure (`learning_curve_all`).
+* Tests: `tests/test_weight_stats.py` (table with and without weights).
+
+---
+
 ## 2026-10-21 (2): task 2 statistics: feature correlations, `bootstrap_ci`, `learning_curve`
 
 **Why.** Task 2 asks which feature follows the measured weight best and how sure and how many samples that needs.
@@ -22,7 +36,7 @@ The comparison of the features had no code, and `bootstrap_ci` / `learning_curve
   * `learning_curve(samples, x_key, sizes, ..., repeats, seed)`: per size, random subsets of whole piles; mean, std
     and central 95 % range of r and of the slope over the repeats. At the full size the spread is 0 by construction.
   * A feature that is constant up to rounding error gives r = NaN (not a warning from `polyfit`).
-* `detkit weight features --workdir W [--crop C] [--boot N] [--plot PNG] [--plot-dir DIR] [--show]`: the table above
+* `python -m detkit weight features --workdir W [--crop C] [--boot N] [--plot PNG] [--plot-dir DIR] [--show]`: the table above
   and plots. `--plot` = one overview PNG, `--plot-dir` = one larger PNG per feature, `--show` = open the figures.
   Points are coloured by pile; with weights each plot shows the weight against the feature, the free least-squares
   line and the line through the origin (the one `weight = feature x constant` uses, its slope is the constant).

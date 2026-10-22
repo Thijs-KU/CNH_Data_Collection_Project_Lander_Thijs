@@ -17,7 +17,7 @@ the calibration photos. Which feature to use is task 2 ([STUDENT_TASKS.md](STUDE
 | `features.py` | `image_features`, `kernel_mask`, `Sample`, `SampleTable` | works |
 | `models.py` | `CountTimesConstant`, `AreaTimesConstant`, `KernelAreaTimesConstant`, `MODELS`, `get_model` | work; bounds `low_g`/`high_g` TODO (task 3) |
 | `stats.py` | `evaluate_model`; `feature_correlations`, `numeric_features`, `bootstrap_ci`, `learning_curve` (task 2); `propagate` (task 3) | `propagate` TODO |
-| `plots.py` | the figures of `detkit weight features` (matplotlib) | works |
+| `plots.py` | the figures of `python -m detkit weight features` (matplotlib) | works |
 | `config.py` | `load_config`/`save_config` (`<workdir>/weight_config.json`) | works |
 
 ## CLI
@@ -48,7 +48,7 @@ pixels; about 0.7 on the sample photos) and `kernel_area_mm2`, `mean_kernel_area
 `SampleTable.from_project` measures them on `<workdir>/photos/<file>` (the preprocessed photo the boxes belong to;
 `kernel_area=False` skips it); the Inference tab passes the prepared photo.
 
-## Feature statistics and plots (`detkit weight features`, `stats.py`, `plots.py`)
+## Feature statistics and plots (`python -m detkit weight features`, `stats.py`, `plots.py`)
 Which feature follows the measured weight, how sure is that, and how many samples does it take? The statistics are in `stats.py` (`feature_correlations`, `bootstrap_ci`,
 `learning_curve`: the task 2 functions, with their original names) and the figures in `plots.py`.
 ```bash
@@ -59,13 +59,17 @@ python -m detkit weight features --workdir $W --boot 1000 --curve kernel_area_px
 |---|---|
 | `--crop C` | only photos of this crop |
 | `--boot N` | adds the 95 % bootstrap interval of r (N rounds, 0 = off) |
-| `--curve FEATURE` | learning curve of that feature (`--sizes 5,10,20`, `--repeats 200`) |
+| `--curve FEATURE` | learning curve of that feature, several comma separated or `all` (`--sizes 5,10,20`, `--repeats 200`); always plotted: in `--plot-dir`, next to `--plot`, else in `<workdir>/reports/features`; with several features also a comparison figure `learning_curve_all` |
 | `--plot FILE` | one overview figure with every feature |
 | `--plot-dir DIR` | one larger figure per feature (+ `learning_curve_<feature>` with `--curve`) |
 | `--format` | file type for `--plot-dir` and the curve: `png` (default), `pdf`, `svg` |
 | `--show` | open the figures in windows (needs a display) |
 
+Short version of all options and commands: [CHEATSHEET_FEATURES.md](CHEATSHEET_FEATURES.md).
+
 **Table.** For every numeric feature: r, r², the least-squares slope and (`--boot`) the interval of r, best first.
+A second table always follows (also without weights): min, median, mean, p95, max and std of every feature over all
+photos.
 Features that never change (r undefined) are left out. Only photos with a weight > 0 count; weights <= 0 are
 reported and left out. A high r is not enough to choose: count, box area and kernel area all grow with the pile, so
 they all score high. Compare the calibration error (`calibrate` + `predict`, on photos not used for calibration) and

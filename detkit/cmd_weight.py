@@ -122,12 +122,14 @@ def cmd_features(a) -> int:
         if left:
             print("no correlation (feature does not vary): " + ", ".join(left))
     else:
-        print("no correlation: fewer than 3 photos with a weight > 0 (or the weights do not vary). "
-              "Values per photo:")
-        print(f"{'feature':24s} {'mean':>12s} {'std':>10s} {'min':>12s} {'max':>12s}")
-        for k in feats:
-            v = np.array([s.get(k) for s in allp], dtype=float)
-            print(f"{k:24s} {v.mean():12.5g} {v.std(ddof=1) if len(v) > 1 else 0.0:10.4g} {v.min():12.5g} {v.max():12.5g}")
+        print("no correlation: fewer than 3 photos with a weight > 0 (or the weights do not vary)")
+    print(f"\nvalue of every feature over the {len(allp)} photos:")
+    print(f"{'feature':24s} {'min':>11s} {'median':>11s} {'mean':>11s} {'p95':>11s} {'max':>11s} {'std':>10s}")
+    for k in feats:
+        v = np.array([s.get(k) for s in allp], dtype=float)
+        sd = v.std(ddof=1) if len(v) > 1 else 0.0
+        print(f"{k:24s} {v.min():11.5g} {np.median(v):11.5g} {v.mean():11.5g} {np.percentile(v, 95):11.5g} "
+              f"{v.max():11.5g} {sd:10.4g}")
     if a.curve:
         _curve(a, usable, feats)
     if a.plot or a.plot_dir or a.show:
@@ -136,13 +138,18 @@ def cmd_features(a) -> int:
 
 
 def _curve(a, usable, feats: list[str]) -> None:
-    """``--curve FEATURE``: how r and the slope of weight against FEATURE settle as the number of photos grows."""
+    """``--curve FEATURE[,FEATURE...]|all``: how r and the slope settle as the number of photos grows. Prints a table
+    per feature and always saves the figures (default folder ``<workdir>/reports/features``)."""
     import numpy as np
 
     from .weight import learning_curve
 
-    if a.curve not in feats:
-        print(f"--curve: {a.curve!r} is not a numeric feature of every photo; choose from: {', '.join(feats)}")
+    names = feats if a.curve.strip().lower() == "all" else [k.strip() for k in a.curve.split(",") if k.strip()]
+    bad = [k for k in names if k not in feats]
+    if bad:
+        print(f"--curve: not a numeric feature of every photo: {', '.join(bad)}; choose from: {', '.join(feats)}")
+        names = [k for k in names if k in feats]
+    if not names:
         return
     if len(usable) < 3:
         print("learning curve: needs at least 3 photos with a weight > 0")
@@ -150,33 +157,44 @@ def _curve(a, usable, feats: list[str]) -> None:
     n = len(usable)
     sizes = ([int(v) for v in a.sizes.split(",")] if a.sizes
              else sorted({int(round(v)) for v in np.linspace(3, n, min(8, n - 2))}))
-    out = learning_curve(usable, a.curve, sizes, crop=a.crop, repeats=a.repeats)
-    if out is None:
-        print("learning curve: needs at least 3 photos with a weight > 0")
-        return
-    print(f"\nlearning curve of {a.curve}: r and slope in {a.repeats} random subsets of whole piles per size")
-    print(f"{'photos':>6s} {'piles':>6s} {'r mean':>8s} {'r 95% range':>17s} {'slope mean':>11s} {'slope 95% range':>25s}")
-    for e in out:
-        rr = f"{_f(e['r_lo'], '{:+.3f}')} .. {_f(e['r_hi'], '{:+.3f}')}"
-        sr = f"{_f(e['slope_lo'], '{:.3g}')} .. {_f(e['slope_hi'], '{:.3g}')}"
-        print(f"{e['n']:6d} {_f(e['n_piles'], '{:.1f}'):>6s} {_f(e['r_mean'], '{:+.3f}'):>8s} {rr:>17s} "
-              f"{_f(e['slope_mean'], '{:.3g}'):>11s} {sr:>25s}")
-    if not (a.plot or a.plot_dir or a.show):
+    curves = {}
+    for k in names:
+        out = learning_curve(usable, k, sizes, crop=a.crop, repeats=a.repeats)
+        if out is None or all(e["r_mean"] is None for e in out):
+            print(f"\nlearning curve of {k}: no correlation (the feature does not vary)")
+            continue
+        curves[k] = out
+        print(f"\nlearning curve of {k}: r and slope in {a.repeats} random subsets of whole piles per size")
+        print(f"{'photos':>6s} {'piles':>6s} {'r mean':>8s} {'r 95% range':>17s} {'slope mean':>11s} {'slope 95% range':>25s}")
+        for e in out:
+            rr = f"{_f(e['r_lo'], '{:+.3f}')} .. {_f(e['r_hi'], '{:+.3f}')}"
+            sr = f"{_f(e['slope_lo'], '{:.3g}')} .. {_f(e['slope_hi'], '{:.3g}')}"
+            print(f"{e['n']:6d} {_f(e['n_piles'], '{:.1f}'):>6s} {_f(e['r_mean'], '{:+.3f}'):>8s} {rr:>17s} "
+                  f"{_f(e['slope_mean'], '{:.3g}'):>11s} {sr:>25s}")
+    if not curves:
         return
     try:
         from .weight import plots as WP
         plt = WP.pyplot(a.show)
     except ImportError:
-        print("matplotlib is not installed: no curve plot (pip install matplotlib)")
+        print("matplotlib is not installed: no curve plots (pip install matplotlib)")
         return
-    fig = WP.learning_curve_figure(plt, out, a.curve, total=n, repeats=a.repeats)
     if a.plot_dir:
-        print(f"wrote {WP.save(fig, Path(a.plot_dir) / f'learning_curve_{a.curve}.{a.format}')}")
+        folder, stem = Path(a.plot_dir), "learning_curve_{}"
     elif a.plot:
-        pl = Path(a.plot)
-        print(f"wrote {WP.save(fig, pl.with_name(f'{pl.stem}_curve_{a.curve}.{a.format}'))}")
-    if not a.show:
-        plt.close(fig)
+        folder, stem = Path(a.plot).parent, Path(a.plot).stem + "_curve_{}"
+    else:
+        folder, stem = Path(a.workdir) / "reports" / "features", "learning_curve_{}"
+    for k, out in curves.items():
+        fig = WP.learning_curve_figure(plt, out, k, total=n, repeats=a.repeats)
+        print(f"wrote {WP.save(fig, folder / (stem.format(k) + '.' + a.format))}")
+        if not a.show:
+            plt.close(fig)
+    if len(curves) > 1:
+        fig = WP.curves_overview_figure(plt, curves, total=n, repeats=a.repeats)
+        print(f"wrote {WP.save(fig, folder / (stem.format('all') + '.' + a.format))}")
+        if not a.show:
+            plt.close(fig)
 
 
 def _plots(a, allp, usable, by_feat: dict, feats: list[str]) -> int:
@@ -238,8 +256,9 @@ def register(sub) -> None:
     p.add_argument("--show", action="store_true", help="open the plots in windows (needs a display)")
     p.add_argument("--format", choices=["png", "pdf", "svg"], default="png",
                    help="file type of the per-feature and curve plots (default png; pdf / svg for the report)")
-    p.add_argument("--curve", metavar="FEATURE", help="learning curve of this feature: how r and the slope settle "
-                   "as the number of photos grows (plot goes with --plot / --plot-dir)")
+    p.add_argument("--curve", metavar="FEATURE", help="learning curve of this feature (several: comma separated; "
+                   "all: every feature): how r and the slope settle as the number of photos grows. Always plotted: "
+                   "in --plot-dir (or next to --plot), else in <workdir>/reports/features")
     p.add_argument("--sizes", help="photo counts for --curve, comma separated (default: 8 steps up to all photos)")
     p.add_argument("--repeats", type=int, default=200, help="random subsets per size for --curve")
     p.set_defaults(fn=cmd_features)
