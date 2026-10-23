@@ -4,7 +4,13 @@ __pycache__/
 .venv-*/
 .pytest_cache/
 .env
-runs/
+
+runs/*
+!runs/*/
+!runs/*/reports/ 
+runs/*/*
+!runs/*/reports/
+
 *.log
 *.safetensors
 *.pt

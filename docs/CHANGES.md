@@ -8,6 +8,16 @@ headless-browser run of the app on Gradio 6.28); not run on the Windows `.venv`,
 
 ---
 
+## 2026-10-23: new defaults: score 0.15, tile 1000, target brightness 230
+
+* `detkit/project.py`: `DEFAULT_SCORE = 0.15` (was 0.2), `DEFAULT_TILE = 1000` (was 1150). These feed the app sliders
+  (score threshold, tile px), `detkit predict --score/--tile` and the proposals.
+* `detkit/preprocess.py`: `TARGET_BRIGHTNESS = 230` (was 220): start value of every brightness slider and the default of
+  `--target-brightness` on `predict` and `eval`.
+* `detkit/app/corners_ui.py`: slider hint now says ~230. `tests/test_preprocess.py`: default assertions updated.
+
+---
+
 ## 2026-10-21 (3): `weight features`: value table
 
 **Why.** With weights the command only printed r and the slope; the distribution of each feature (the table that

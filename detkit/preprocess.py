@@ -158,7 +158,7 @@ def warp_to_canvas(image: Image.Image, corners, size: tuple[int, int] = CANVAS_S
 
 
 # ---- brightness / contrast normalization ------------------------------------------------------------
-TARGET_BRIGHTNESS = 220                   # default: median lightness (CIELAB L, 0-255) the photo is brought to
+TARGET_BRIGHTNESS = 230                   # default: median lightness (CIELAB L, 0-255) the photo is brought to
 DEFAULT_CONTRAST = 1.0                    # default contrast enhancement (0 = off, 1 = full CLAHE)
 MAX_GAMMA = 6.0                           # limits how far one photo may be pushed (gamma in [1/6, 6])
 
