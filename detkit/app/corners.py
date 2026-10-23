@@ -256,11 +256,25 @@ def normalize_all(project, target: float = TARGET_BRIGHTNESS, contrast: float = 
     return msg + (f" Failed: {', '.join(failed)}." if failed else "")
 
 
-def adopt_normalized(project, name: str, original: Path, info: dict) -> None:
+def adopt_preprocessed(project, name: str, original: Path, warp: dict | None = None,
+                       norm: dict | None = None) -> None:
     """Record that the project photo ``name`` is ``original`` (a raw upload, e.g. from the Inference tab) after a
-    brightness normalization ``info``, so the Preprocessing tab can redo or undo it from the raw photo."""
+    warp (``warp`` = the info of ``warp_to_canvas``) and / or a brightness normalization ``norm``, so the
+    Preprocessing tab can redo or undo both from the raw photo."""
+    if not warp and not norm:
+        return
     warps = load_warps(project)
     if name in warps:
         return
-    warps[name] = {"source": _keep_original(project, name, Path(original), None), "normalize": info}
+    rec = {"source": _keep_original(project, name, Path(original), None)}
+    if warp:
+        rec.update(warp)
+    if norm:
+        rec["normalize"] = norm
+    warps[name] = rec
     _write_warps(project, warps)
+
+
+def adopt_normalized(project, name: str, original: Path, info: dict) -> None:
+    """Brightness-only case of :func:`adopt_preprocessed`."""
+    adopt_preprocessed(project, name, original, None, info)

@@ -159,3 +159,50 @@ def test_report_files_and_cli_with_predictions(tmp_path, capsys):
     j = json.loads((out / "eval.json").read_text())
     assert j["best_f1"]["score"] == pytest.approx(0.7) and "map_50_95" in j
     assert "Recommended operating score" in (out / "eval.md").read_text()
+
+
+def test_kernel_area_scatter_in_report(tmp_path, capsys):
+    import cv2
+    import numpy as np
+    from detkit.project import Project
+
+    wd = tmp_path / "w"
+    p = Project(workdir=wd, classes=["a"])
+    p.save()
+    p.photos_dir.mkdir()
+    img = np.full((120, 200, 3), (235, 235, 240), np.uint8)                    # paper with two yellow discs
+    cv2.circle(img, (30, 30), 10, (40, 160, 230), -1)
+    cv2.circle(img, (110, 60), 14, (40, 160, 230), -1)
+    cv2.imwrite(str(p.photos_dir / "i.jpg"), img)
+    g1, g2 = [10, 10, 50, 50], [90, 40, 130, 80]
+    gt = mk_gt({"i.jpg": [(g1, "a"), (g2, "a")]})
+    C.save(gt, wd / "annotations" / "reviewed_coco.json")
+    # the detector finds disc 1 (box a bit loose) and misses disc 2 -> predicted kernel area is about half the GT
+    (tmp_path / "p.json").write_text(json.dumps({"i.jpg": {"detections": dets(([8, 8, 54, 54], 0.9, "a"))}}))
+
+    class A: pass
+    a = A()
+    a.__dict__.update(workdir=str(wd), gt="reviewed", pred=str(tmp_path / "p.json"), model=None, images=None,
+                      iou=0.5, op_score=0.5, map=False, level="auto", tile=None, overlap=None, crop=None,
+                      gt_note=None, name="k", out=str(tmp_path / "out"), score=0.05, kernel_area=True,
+                      canonicalize=False)
+    assert cmd_eval(a) == 0
+    out = tmp_path / "out"
+    assert (out / "kernel_area_scatter.png").stat().st_size > 0 and (out / "kernel_area.csv").exists()
+    row = list(__import__("csv").DictReader(open(out / "kernel_area.csv")))[0]
+    truth_gt, truth_pred = math.pi * (10 ** 2 + 14 ** 2), math.pi * 10 ** 2
+    assert float(row["gt_kernel_area"]) == pytest.approx(truth_gt, rel=0.1)
+    assert float(row["pred_kernel_area"]) == pytest.approx(truth_pred, rel=0.1)
+    assert json.loads((out / "eval.json").read_text())["kernel_area"]["n"] == 1
+    assert "Kernel-pixel area error" in (out / "eval.md").read_text()
+    assert "kernel area (1 photos)" in capsys.readouterr().out
+    del a.kernel_area                                                          # automatic: not passing it is enough
+    a.out = str(tmp_path / "out3")
+    assert cmd_eval(a) == 0 and (tmp_path / "out3" / "kernel_area_scatter.png").exists()
+    a.kernel_area, a.out = False, str(tmp_path / "out2")                        # --no-kernel-area: nothing extra
+    assert cmd_eval(a) == 0 and not (tmp_path / "out2" / "kernel_area_scatter.png").exists()
+    from detkit.cli import build_parser
+    ap = build_parser()
+    base = ["eval", "--gt", "reviewed", "--pred", "x.json"]
+    assert ap.parse_args(base).kernel_area is True and ap.parse_args(base + ["--no-kernel-area"]).kernel_area is False
+    assert ap.parse_args(base + ["--kernel-area"]).kernel_area is True       # old flag still accepted

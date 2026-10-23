@@ -1,6 +1,7 @@
 # Changes to detkit (log)
 
-Every change made to the code base is recorded here, newest first. Append new entries at the top. The other
+This file lists how the code base differs from the original project, not the history of how it got there: when a
+setting or behaviour changed more than once, only the end result is described. The other
 docs (`APP.md`, `WEIGHT.md`, ...) describe the original toolkit and are left unchanged.
 
 Baseline: the repository at its last commit. Tested with pytest in a Linux sandbox (Python 3.10, Gradio 6.30, plus a
@@ -8,13 +9,86 @@ headless-browser run of the app on Gradio 6.28); not run on the Windows `.venv`,
 
 ---
 
-## 2026-10-23: new defaults: score 0.15, tile 1000, target brightness 230
+## Defaults: detection score 0.2, tile 1000, brightness 230, contrast 1.0
 
-* `detkit/project.py`: `DEFAULT_SCORE = 0.15` (was 0.2), `DEFAULT_TILE = 1000` (was 1150). These feed the app sliders
-  (score threshold, tile px), `detkit predict --score/--tile` and the proposals.
-* `detkit/preprocess.py`: `TARGET_BRIGHTNESS = 230` (was 220): start value of every brightness slider and the default of
-  `--target-brightness` on `predict` and `eval`.
-* `detkit/app/corners_ui.py`: slider hint now says ~230. `tests/test_preprocess.py`: default assertions updated.
+* `detkit/project.py`: `DEFAULT_SCORE = 0.2`, `DEFAULT_TILE = 1000` (px).
+* Review tab and Inference tab sliders start at these values (originally: score 0.5, tile = the project's tile, in
+  the Inference tab the best-F1 score of the last eval and the checkpoint's tile). The Inference tab still shows the
+  best-F1 score of the newest eval as a hint under the score slider. Choosing another checkpoint now only changes
+  the overlap, no longer the tile.
+* `detkit predict`: `--score` defaults to 0.2 and `--tile` to 1000 (originally 0.5, and the checkpoint's tile).
+* `propose_rfdetr` / `propose_photos` and the scripted Inference `infer` API use the same defaults.
+* `detkit/preprocess.py`: `TARGET_BRIGHTNESS = 230` and `DEFAULT_CONTRAST = 1.0` are the start values of all
+  brightness / contrast sliders and the defaults of `--target-brightness` / `--contrast` on `predict` and `eval`.
+  Photos you already normalized keep the settings stored in `meta/warps.json`; apply again to change them.
+* Not changed: `detkit eval --score` stays 0.05 (a floor, so the F1 curve can find its best score) and eval's tile
+  still comes from the manifest / checkpoint; the project's own `tile` (800, used to cut training tiles).
+
+---
+
+## Inference tab: kernel area column and green kernel pixels
+
+* The results table (and CSV) get a column `kernel_area_px` next to `total_area_px` (box area): the kernel pixels
+  inside the boxes, the feature the `kernel_area_x_constant` model uses (`detkit/app/inference.py`).
+* New checkbox "Show the kernel pixels (green) inside the detected boxes" (on by default): the detection images tint the
+  pixels that `weight/features.py: kernel_mask` counts green (`inference.overlay(kernel_pixels=...)`,
+  `run_inference(kernel_overlay=...)`; off by default in the scripted API).
+* `detkit weight calibrate` prints a WARNING when photos of one pile (same `pile_id`) have different
+  `total_weight_g` (`SampleTable.inconsistent_piles`): one pile has one balance reading, so it is probably a typo, and a
+  single wrong weight inflates the spread and with it `low_g` / `high_g`.
+
+---
+
+## `detkit eval`: scatter of the kernel area (automatic)
+
+* `detkit/cmd_eval.py`, no flag needed: per photo `eval` compares the kernel pixels (`weight/features.py: kernel_mask`, the
+  `kernel_area_px` feature) of the predicted boxes (score >= `--op-score`, all classes pooled) with those of the GT
+  boxes, like `area_scatter.png` does for the box area. It reads the photos (`--images`, default the project's
+  photos); when none are found, or with `--canonicalize` (its frame differs from the boxes'), it is skipped with a
+  note. `--no-kernel-area` turns it off (`--kernel-area` is still accepted and does nothing).
+* Written to the report folder: `kernel_area.csv`, `kernel_area_scatter.png`, a `kernel_area` block in `eval.json`
+  and a section "Kernel-pixel area error" in `eval.md`. It needs the photos and adds some time per photo.
+* `detkit/evaluate.py`: `kernel_area_table`, `write_kernel_area`. Test: `test_kernel_area_scatter_in_report`.
+
+---
+
+## Inference tab: warp new photos to the A4 sheet
+
+* New accordion "Warp new photos to the A4 sheet (optional)" in the Inference tab (`detkit/app/inference_ui.py`): pick an
+  uploaded photo, click the 4 corners of the sheet (same clicking as the Preprocessing tab, `detkit/app/corners.py`),
+  check the warped preview, *Use this warp* (or *Remove the warp of this photo*). Several photos can have a warp;
+  uploads without one are used as before. The preview gallery shows the warp (and the brightness step if it is on).
+* `inference.prepare_photos` / `run_inference` take `corners` ({uploaded file name: 4 points in pixels of the upload}):
+  warp to the 900x1200 canvas first, then the brightness step. Photos already in the project's photos folder are never
+  warped again. The scripted `infer` API takes `corners_json`.
+* *Save as samples* stores the warped photo (its size is the canvas size) and keeps the raw upload in
+  `photos_original/` with the warp (and brightness) in `meta/warps.json`, so the Preprocessing tab can redo or undo it
+  (`corners.adopt_preprocessed`; `adopt_normalized` is its brightness-only case). `scale_mm_per_px` is set when the
+  project has that property, as for a warp in the Preprocessing tab.
+* The ROI field is now in pixels of the photo after the warp. Tests: `test_inference_warps_uploads_with_clicked_corners`
+  (logic only; the Gradio layout was not run in the sandbox).
+
+---
+
+## Weight models: spread and bounds `low_g` / `high_g` (task 3, part 1)
+
+* `detkit/weight/models.py`, `FeatureTimesConstant.fit`: besides the constants it stores `spreads` per crop (and pooled
+  for `default`): `sd` of the per-pile mean ratios weight / feature, `n` = number of piles, `photos`. Photos of one
+  pile (same `pile_id`, one shared weight) are not independent, so the unit is the pile; a photo without `pile_id` is
+  its own pile. A crop with fewer than 2 piles gets no spread. `params()` / `set_params()` carry the spreads (files
+  without them still load).
+* `predict` returns a 95 % prediction interval for a new pile: `weight +- t(n-1) * sqrt(1 + 1/n) * sd * feature`,
+  `low_g` not below 0. Student-t factors come from a small table (`t_factor`), so no scipy is needed. Constant and
+  spread come from the same crop (`default` for an unknown crop); with no spread the bounds stay empty and the note
+  says so.
+* Tests: `tests/test_weight.py` (`test_fit_stores_spread_per_pile`, `test_predict_gives_95_percent_prediction_interval`);
+  `test_task3_models_give_bounds` in `tests/test_student_tasks.py` now runs instead of skipping.
+* `detkit weight calibrate` also saves the spreads, in `weight_config.json` under `spreads` (`{<constants key>:
+  {<crop>: {sd, n, photos}}}`; the CLI prints them), and the CLI and the Inference tab rebuild the model with them,
+  so the tab shows `low_g` / `high_g`. Editing a constant by hand in the tab's constants table removes the spread of
+  that crop when the value changes by more than 0.1 % (no bounds rather than misleading ones). A config written
+  before this change has no spreads: calibrate again.
+* Not done: `propagate` (task 3, part 2).
 
 ---
 
@@ -73,7 +147,7 @@ The comparison of the features had no code, and `bootstrap_ci` / `learning_curve
 * `numeric_features(samples)` (stats.py): the feature keys every photo has as a number.
 * Tests: `tests/test_weight_stats.py` (ranking, pile-wise vs photo-wise intervals, reproducibility, curve settles,
   edge cases, CLI); the three task 2 checks in `tests/test_student_tasks.py` now run and pass instead of skipping.
-* Not done: `propagate` and the `low_g` / `high_g` bounds (task 3).
+* Not done: `propagate` (task 3).
 
 ---
 
@@ -100,23 +174,9 @@ are kernel does not depend on the orientation: a kernel covers the same number o
 
 ---
 
-## 2026-10-20 (3): detection defaults: score 0.2, tile 1150
+## 2026-10-20 (2): the same normalization for uploads, `predict` and `eval`
 
-* `detkit/project.py`: `DEFAULT_SCORE = 0.2`, `DEFAULT_TILE = 1150` (px).
-* Review tab and Inference tab sliders start at these values (before: score 0.5, tile = the project's tile, in the
-  Inference tab the best-F1 score of the last eval and the checkpoint's tile). The Inference tab still shows the
-  best-F1 score of the newest eval as a hint under the score slider. Choosing another checkpoint now only changes
-  the overlap, no longer the tile.
-* `detkit predict`: `--score` defaults to 0.2 and `--tile` to 1150 (before: 0.5, and the checkpoint's tile).
-* `propose_rfdetr` / `propose_photos` and the scripted Inference `infer` API use the same defaults.
-* Not changed: `detkit eval --score` stays 0.05 (a floor, so the F1 curve can find its best score) and eval's tile
-  still comes from the manifest / checkpoint; the project's own `tile` (800, used to cut training tiles).
-
-## 2026-10-20 (2): the same normalization for uploads, `predict` and `eval`; new defaults 220 / contrast 1.0
-
-* Defaults changed everywhere: target brightness **220** (was 200), contrast enhancement **1.0** (was 0). They are
-  `TARGET_BRIGHTNESS` / `DEFAULT_CONTRAST` in `detkit/preprocess.py` and the start values of all sliders.
-  Photos you already normalized keep the settings stored in `meta/warps.json`; apply again to change them.
+* Default target brightness and contrast: see the defaults entry at the top.
 * `detkit/preprocess.py`: `prepare_photo(image, source, normalize)` (normalizes a RAW photo, leaves photos from a
   project's `photos` folder alone, so nothing is processed twice), `in_project_photos(path)` and
   `before_after(...)` (original | normalized side by side with the median brightness).
@@ -126,7 +186,7 @@ are kernel does not depend on the orientation: a kernel covers the same number o
   normalized photo. *Save as samples* stores the normalized photo in the project and keeps the raw upload in
   `photos_original/` with its settings in `meta/warps.json`, so the Preprocessing tab can redo or undo it
   (`corners.adopt_normalized`). The scripted `infer` API takes `normalize` (default true).
-* `detkit predict --normalize [--target-brightness 220] [--contrast 1.0]` and the same flags on
+* `detkit predict --normalize [--target-brightness 230] [--contrast 1.0]` and the same flags on
   `detkit eval --model ... --images <raw folder>`. Per photo the log prints `brightness before -> after`;
   `predictions.json` gets `"normalized": {target, contrast, gamma, before, after}` (null = untouched); `predict`
   writes `<name>_pre.jpg` (original | normalized, next to the overlay unless `--no-overlay`), `eval` writes
@@ -135,7 +195,7 @@ are kernel does not depend on the orientation: a kernel covers the same number o
 * Tests: `tests/test_preprocess.py` (defaults, CLI flags, `prepare_photo`), `tests/test_app.py` (Inference: only
   uploads are normalized, saved with record and original), `tests/test_predict_single_class.py` (`predict_paths` and
   eval `_run_model` with a stubbed model). Also driven in a headless browser.
-* Limits: a very dark photo (median below roughly 100) cannot reach 220 because gamma is capped at 1/6 (the preview
+* Limits: a very dark photo (median below roughly 100) cannot reach a high target because gamma is capped at 1/6 (the preview
   and the log show the value actually reached). Contrast 1.0 (full CLAHE) also sharpens the kernel edges, so re-check
   detector counts and box areas on normalized photos before relying on the area constant.
 
@@ -143,7 +203,7 @@ are kernel does not depend on the orientation: a kernel covers the same number o
 
 * The tab is now called **Preprocessing** (label in `detkit/app/ui.py`). Entries below that say "Corners tab" mean
   this tab; the files keep their names (`detkit/app/corners.py`, `corners_ui.py`).
-* `detkit/preprocess.py`: `TARGET_BRIGHTNESS = 200`, `brightness(image)` (median CIELAB lightness, 0-255) and
+* `detkit/preprocess.py`: `TARGET_BRIGHTNESS` (default 230, see the defaults entry), `brightness(image)` (median CIELAB lightness, 0-255) and
   `normalize_brightness(image, target, contrast)`.
   * One gamma curve on the lightness channel puts the median at `target`; gamma keeps black and white fixed, so
     nothing clips, and is limited to [1/6, 6]. Colours (a, b) are not touched. Because converting back to RGB clips

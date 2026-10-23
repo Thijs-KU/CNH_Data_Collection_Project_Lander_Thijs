@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from .project import Project
@@ -32,7 +33,7 @@ def configured_model(cfg: dict, name: str):
     from .weight import MODELS, get_model
 
     key = getattr(MODELS.get(name), "config_key", None)
-    return get_model(name, constants=cfg[key]) if key else get_model(name)
+    return get_model(name, constants=cfg[key], spreads=cfg.get("spreads", {}).get(key)) if key else get_model(name)
 
 
 def cmd_predict(a) -> int:
@@ -90,12 +91,18 @@ def cmd_calibrate(a) -> int:
 
     cfg = load_config(a.workdir)
     samples = _samples(a).with_weight()
+    for pid, v in samples.inconsistent_piles().items():
+        print(f"WARNING: pile {pid}: its photos have different weights (one pile has one weight, so one is probably "
+              f"a typo): " + ", ".join(f"{s.file} {s.weight_g:g} g" for s in v), file=sys.stderr)
     model = configured_model(cfg, a.model).fit(samples)
     cfg.update({"model": a.model, model.config_key: model.constants})
+    cfg.setdefault("spreads", {})[model.config_key] = model.spreads
     p = save_config(a.workdir, cfg)
     print(f"calibrated {a.model} on {len(samples)} weighed photos -> {p} (default model is now {a.model})")
     for k, v in model.constants.items():
-        print(f"  {k:10s} {v:.6g} {model.unit}")
+        sp = model.spreads.get(k)
+        extra = f"  sd {sp['sd']:.3g} over {sp['n']} piles" if sp else "  no spread (< 2 piles): no bounds"
+        print(f"  {k:10s} {v:.6g} {model.unit}{extra}")
     return 0
 
 

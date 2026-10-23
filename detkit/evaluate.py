@@ -515,6 +515,81 @@ def _md(res: dict, meta: dict) -> str:
     return "\n".join(L) + "\n"
 
 
+def kernel_area_table(gt_coco: dict, preds: dict, images_dir: str | Path, op_score: float
+                      ) -> tuple[list[dict], list[str]]:
+    """Per photo: kernel pixels of the GT boxes against those of the predicted boxes (score >= ``op_score``, all
+    classes pooled), the quantity the ``kernel_area_x_constant`` model uses. The photo is read from
+    ``images_dir / file`` and must be the (preprocessed) photo the boxes belong to; ``weight.features.kernel_mask``
+    counts only the pixels inside the boxes that really are kernel. Returns ``(rows, files that were not found)``."""
+    from .weight.features import kernel_mask
+
+    gt, _ = gt_from_coco(gt_coco)
+    rows, missing = [], []
+    for f, g in gt.items():
+        path = Path(images_dir) / f
+        if not path.exists():
+            missing.append(f)
+            continue
+        gb = [b for b, _c in g]
+        pb = [b for b, s, _c in preds.get(f, []) if s >= op_score]
+        ga = float(kernel_mask(path, gb)[0].sum()) if gb else 0.0
+        pa = float(kernel_mask(path, pb)[0].sum()) if pb else 0.0
+        rows.append({"file": f, "gt_kernel_area": round(ga), "pred_kernel_area": round(pa),
+                     "kernel_area_err": round(pa - ga),
+                     "kernel_area_err_pct": 100 * (pa - ga) / ga if ga else float("nan")})
+    return rows, missing
+
+
+def write_kernel_area(rows: list[dict], out_dir: str | Path, op_score: float, title: str = "",
+                      missing: list[str] | None = None) -> dict:
+    """Save ``kernel_area.csv`` and ``kernel_area_scatter.png`` (predicted against GT kernel pixels per photo, like
+    ``area_scatter.png``) in the report folder, add the numbers to ``eval.json`` and a section to ``eval.md``.
+    Returns the agreement metrics (bias, MAE, R2, ...)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    x = [r["gt_kernel_area"] for r in rows]
+    y = [r["pred_kernel_area"] for r in rows]
+    cm = count_metrics(y, x)
+    _write_csv(out / "kernel_area.csv", rows, ["file", "gt_kernel_area", "pred_kernel_area", "kernel_area_err",
+                                                "kernel_area_err_pct"])
+    fig, ax = plt.subplots(figsize=(5.4, 5))
+    hi = max(x + y + [1]) * 1.05
+    ax.plot([0, hi], [0, hi], "k--", lw=1, label="y = x")
+    ax.scatter(x, y, color="#1f77b4", s=36, zorder=3)
+    if len(x) <= 15:
+        for r, xi, yi in zip(rows, x, y):
+            ax.annotate(_short(r["file"]), (xi, yi), fontsize=6, xytext=(3, 3), textcoords="offset points")
+    ax.set(xlabel="GT kernel area (px^2, kernel pixels only)",
+           ylabel=f"predicted kernel area (px^2, score >= {op_score})", xlim=(0, hi), ylim=(0, hi))
+    ax.set_title(f"per-image kernel area: bias {_f(cm.get('bias'), 1)}, MAE {_f(cm.get('mae'), 1)}, "
+                 f"R2 {_f(cm.get('r2'), 3)}\n{title}", fontsize=9)
+    ax.grid(alpha=0.3); ax.legend(loc="upper left")
+    fig.savefig(out / "kernel_area_scatter.png", dpi=130, bbox_inches="tight"); plt.close(fig)
+
+    j = out / "eval.json"
+    if j.exists():
+        data = json.loads(j.read_text(encoding="utf-8"))
+        data["kernel_area"] = {"op_score": op_score, **cm, "skipped_files": missing or []}
+        j.write_text(json.dumps(data, indent=1, default=float), encoding="utf-8")
+    md = out / "eval.md"
+    sec = ["", f"## Kernel-pixel area error (score >= {op_score})", "",
+           "Kernel pixels inside the boxes (`weight/features.py: kernel_mask`), predicted boxes against GT boxes, "
+           "per photo.", "",
+           "| n photos | bias px^2 | MAE px^2 | RMSE px^2 | MAPE % | R2 |", "|---|---|---|---|---|---|",
+           f"| {cm['n']} | {_f(cm.get('bias'), 0)} | {_f(cm.get('mae'), 0)} | {_f(cm.get('rmse'), 0)} | "
+           f"{_f(cm.get('mape_pct'), 1)} | {_f(cm.get('r2'), 3)} |", "",
+           "Files: `kernel_area.csv`, `kernel_area_scatter.png`."]
+    if missing:
+        sec.append(f"Not found in the image folder, so skipped: {', '.join(missing)}.")
+    if md.exists():
+        md.write_text(md.read_text(encoding="utf-8").rstrip("\n") + "\n" + "\n".join(sec) + "\n", encoding="utf-8")
+    return cm
+
+
 def write_report(res: dict, out_dir: str | Path, meta: dict) -> Path:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

@@ -112,6 +112,57 @@ def test_sample_table_from_predictions(tmp_path):
     assert len(t) == 1 and t.rows[0].features["count"] == 3 and t.rows[0].weight_g == pytest.approx(0.1)
 
 
+def test_fit_stores_spread_per_pile(tmp_path):
+    import statistics
+    t = SampleTable()
+    # two piles of two photos each (a photo pair shares one weight): ratios a: 0.04, 0.05; b: 0.045, 0.06
+    for i, (pile, n_box, w) in enumerate([("a", 10, 0.40), ("a", 10, 0.50), ("b", 20, 0.90), ("b", 5, 0.30)]):
+        t.add(f"w{i}.jpg", [box(j * 30, 0) for j in range(n_box)],
+              {"crop": "wheat", "total_weight_g": w, "pile_id": pile})
+    t.add("s0.jpg", [box(0, 0)], {"crop": "sunflower", "total_weight_g": 0.05})           # one pile: no spread
+    m = CountTimesConstant().fit(t)
+    pile_means = [(0.04 + 0.05) / 2, (0.045 + 0.06) / 2]
+    assert m.spreads["wheat"] == {"sd": pytest.approx(statistics.stdev(pile_means)), "n": 2, "photos": 4}
+    assert "sunflower" not in m.spreads                                                  # n = 1 pile -> nothing to estimate
+    assert m.spreads["default"]["n"] == 3 and m.spreads["default"]["photos"] == 5 and m.spreads["default"]["sd"] > 0
+    m.save(tmp_path / "m.json")
+    m2 = WeightModel.load(tmp_path / "m.json")
+    assert m2.spreads == m.spreads and m2.constants == m.constants
+    old = CountTimesConstant()                                                           # saved before task 3
+    old.set_params({"constants": {"default": 0.04}})
+    assert old.spreads == {}
+    solo = SampleTable()                                                                 # no pile_id: each photo is a pile
+    for i, w in enumerate([0.40, 0.50]):
+        solo.add(f"p{i}.jpg", [box(j * 30, 0) for j in range(10)], {"crop": "wheat", "total_weight_g": w})
+    assert CountTimesConstant().fit(solo).spreads["wheat"]["n"] == 2
+
+
+def test_predict_gives_95_percent_prediction_interval():
+    import statistics
+    from detkit.weight.models import t_factor
+    t = SampleTable()
+    ratios = [0.040, 0.044, 0.048, 0.052, 0.056, 0.060]                    # one pile each, 10 kernels
+    for i, r in enumerate(ratios):
+        t.add(f"w{i}.jpg", [box(j * 30, 0) for j in range(10)], {"crop": "wheat", "total_weight_g": 10 * r,
+                                                                    "pile_id": f"p{i}"})
+    m = CountTimesConstant().fit(t)
+    n, sd = 6, statistics.stdev(ratios)
+    e = m.predict({"count": 20}, "wheat")
+    u = t_factor(n - 1) * math.sqrt(1 + 1 / n) * sd * 20
+    assert t_factor(5) == pytest.approx(2.571)
+    assert e.weight_g == pytest.approx(20 * statistics.fmean(ratios))
+    assert e.low_g == pytest.approx(e.weight_g - u) and e.high_g == pytest.approx(e.weight_g + u)
+    assert e.low_g < e.weight_g < e.high_g
+    wide = m.predict({"count": 40}, "wheat")                                # bounds scale with the feature
+    assert wide.high_g - wide.low_g == pytest.approx(2 * (e.high_g - e.low_g))
+    other = m.predict({"count": 20}, "corn")                                # unknown crop: default constant + spread
+    assert other.low_g is not None and "default" in other.note
+    assert m.predict({"count": 0}, "wheat").low_g == 0.0
+    one = CountTimesConstant().fit(SampleTable())                           # nothing fitted: constants only
+    e1 = one.predict({"count": 10}, "wheat")
+    assert e1.low_g is None and e1.high_g is None and "no bounds" in e1.note
+
+
 def test_count_times_constant(tmp_path):
     m = CountTimesConstant({"default": 0.04, "wheat": 0.05})
     assert m.predict({"count": 10}, "wheat").weight_g == pytest.approx(0.5)
@@ -150,6 +201,39 @@ def test_config(tmp_path):
     save_config(tmp_path, cfg)
     assert load_config(tmp_path)["constants"]["wheat"] == 0.06
     assert "sunflower" in load_config(tmp_path)["constants"]
+
+
+def test_calibrate_saves_spread_and_model_gives_bounds(tmp_path):
+    from detkit.cmd_weight import configured_model
+    make_project(tmp_path)
+    w = str(tmp_path)
+    assert load_config(w)["spreads"] == {}                                   # default: no spread, no bounds
+    assert main(["weight", "calibrate", "--workdir", w]) == 0
+    cfg = load_config(w)
+    sp = cfg["spreads"]["constants"]
+    assert sp["wheat"]["n"] == 4 and sp["wheat"]["sd"] > 0 and "sunflower" not in sp   # sunflower: no weighed photo
+    m = configured_model(cfg, "count_x_constant")                            # rebuilt from the config, as the app does
+    e = m.predict({"count": 10}, "wheat")
+    assert m.spreads == sp and e.low_g is not None and e.low_g < e.weight_g < e.high_g
+    assert configured_model(cfg, "area_x_constant").spreads == {}            # other models keep their own spreads
+
+
+def test_calibrate_warns_about_piles_with_different_weights(tmp_path, capsys):
+    p = make_project(tmp_path)
+    st = p.store()
+    for f, w in (("w0.jpg", 0.10), ("w1.jpg", 0.70)):                         # same pile, one weight is a typo
+        boxes, meta = st.get_image(f)
+        st.upsert_image(f, 1000, 1000, boxes, {**meta, "pile_id": "A", "total_weight_g": w}, reviewed=True)
+    t = SampleTable.from_project(p)
+    bad = t.inconsistent_piles()
+    assert list(bad) == ["A"] and sorted(s.file for s in bad["A"]) == ["w0.jpg", "w1.jpg"]
+    assert main(["weight", "calibrate", "--workdir", str(tmp_path)]) == 0
+    err = capsys.readouterr().err
+    assert "WARNING: pile A" in err and "w1.jpg 0.7 g" in err
+    for f in ("w0.jpg", "w1.jpg"):                                            # fixed: no warning
+        boxes, meta = st.get_image(f)
+        st.upsert_image(f, 1000, 1000, boxes, {**meta, "total_weight_g": 0.10}, reviewed=True)
+    assert SampleTable.from_project(p).inconsistent_piles() == {}
 
 
 def test_cli(tmp_path, capsys):

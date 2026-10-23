@@ -20,7 +20,8 @@ HELP = (
     "check the preview, then apply it to this photo or to all photos. Brightness is measured on the paper "
     "(the median over the photo), so warp first. It keeps your boxes and is always redone from the saved original, "
     "so you can change the settings later. "
-    "New raw photos: add them in the Review tab first, then warp them here. Add an extra property named "
+    "New raw photos: add them in the Review tab first, then warp them here (or warp them on upload in the Inference "
+    "tab, which keeps the raw photo for redoing it here). Add an extra property named "
     "`scale_mm_per_px` (Review tab) to get the area features in mm². Reload the list in the Review tab afterwards."
 ).format(w=CANVAS_SIZE[0], h=CANVAS_SIZE[1])
 

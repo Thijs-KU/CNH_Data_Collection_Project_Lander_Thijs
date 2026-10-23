@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from collections import Counter
 from pathlib import Path
 
 from . import coco as C
-from .evaluate import evaluate, preds_from_json, write_report
+from .evaluate import evaluate, kernel_area_table, preds_from_json, write_kernel_area, write_report
 from .preprocess import DEFAULT_CONTRAST, PREPROCESSOR, TARGET_BRIGHTNESS, before_after, prepare_photo
 from .project import Project
 
@@ -129,6 +130,19 @@ def cmd_eval(a) -> int:
     res = evaluate(gt, preds, iou=a.iou, op_score=a.op_score, model_labels=model_labels, map_grid=a.map)
     meta = {"name": name, "gt": str(gt_path), "level": level, "pred_desc": pred_desc, "gt_note": note + crops_note}
     write_report(res, out, meta)
+    if getattr(a, "kernel_area", True):
+        if getattr(a, "canonicalize", False):
+            print("kernel area skipped: --canonicalize changes the frame of the photos the boxes belong to",
+                  file=sys.stderr)
+        else:
+            rows, missing = kernel_area_table(gt, preds, images_dir, a.op_score)
+            if rows:
+                cm = write_kernel_area(rows, out, a.op_score, name, missing)
+                print(f"kernel area ({cm['n']} photos): bias={cm['bias']:.0f} MAE={cm['mae']:.0f} "
+                      f"R2={cm.get('r2', float('nan')):.3f}  -> {out / 'kernel_area_scatter.png'}")
+            else:
+                print(f"kernel area skipped: no photos found in {images_dir} (point --images at them, or pass "
+                      f"--no-kernel-area to silence this)", file=sys.stderr)
     b, mi, ca = res["best_f1"], res["micro"], res["count_area"]["op"]["count"]
     print(f"\nIoU {a.iou}  op score {a.op_score}: P={mi['precision']:.3f} R={mi['recall']:.3f} F1={mi['f1']:.3f} "
           f"AP={mi['ap']:.3f}  | best F1={b['f1']:.3f} @ score {b['score']}")
@@ -163,6 +177,12 @@ def register(sub) -> None:
     s.add_argument("--iou", type=float, default=0.5)
     s.add_argument("--op-score", type=float, default=0.5, help="score threshold for the headline P/R/F1 and count error")
     s.add_argument("--map", action="store_true", help="also compute mAP over IoU 0.5:0.95")
+    s.add_argument("--no-kernel-area", dest="kernel_area", action="store_false",
+                   help="skip the kernel-pixel comparison (by default, when the photos are found, every eval also "
+                        "writes kernel_area.csv + kernel_area_scatter.png: kernel pixels of predicted vs GT boxes "
+                        "per photo)")
+    s.add_argument("--kernel-area", dest="kernel_area", action="store_true", help=argparse.SUPPRESS)  # now the default
+    s.set_defaults(kernel_area=True)
     s.add_argument("--level", choices=["auto", "tile", "source"], default="auto", help="for --gt PATH")
     s.add_argument("--tile", type=int, help="--model on source-level GT: tile size (default: manifest/checkpoint)")
     s.add_argument("--overlap", type=float)

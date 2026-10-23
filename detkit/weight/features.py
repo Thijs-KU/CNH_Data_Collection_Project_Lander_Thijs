@@ -198,6 +198,17 @@ class SampleTable:
     def with_weight(self) -> "SampleTable":
         return SampleTable([s for s in self.rows if s.weight_g is not None])
 
+    def inconsistent_piles(self, tol: float = 0.01) -> dict[str, list[Sample]]:
+        """Piles (same ``pile_id``) whose weighed photos do not share one weight (they should: one pile, one
+        balance reading), i.e. a typo in a ``total_weight_g``. ``{pile_id: [its weighed photos]}``; ``tol`` = relative
+        difference that is still accepted."""
+        by: dict[str, list[Sample]] = {}
+        for s in self.with_weight().rows:
+            pid = s.meta.get("pile_id")
+            if pid not in (None, ""):
+                by.setdefault(str(pid), []).append(s)
+        return {k: v for k, v in by.items() if max(s.weight_g for s in v) > min(s.weight_g for s in v) * (1 + tol)}
+
     def for_crop(self, crop: str | None) -> "SampleTable":
         return SampleTable([s for s in self.rows if crop is None or s.crop == crop])
 

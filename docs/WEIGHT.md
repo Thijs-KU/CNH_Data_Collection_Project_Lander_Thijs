@@ -15,7 +15,7 @@ the calibration photos. Which feature to use is task 2 ([STUDENT_TASKS.md](STUDE
 | file | content | status |
 |---|---|---|
 | `features.py` | `image_features`, `kernel_mask`, `Sample`, `SampleTable` | works |
-| `models.py` | `CountTimesConstant`, `AreaTimesConstant`, `KernelAreaTimesConstant`, `MODELS`, `get_model` | work; bounds `low_g`/`high_g` TODO (task 3) |
+| `models.py` | `CountTimesConstant`, `AreaTimesConstant`, `KernelAreaTimesConstant`, `MODELS`, `get_model` | work; `low_g`/`high_g` = 95 % prediction interval from the per-pile spread (task 3, part 1) |
 | `stats.py` | `evaluate_model`; `feature_correlations`, `numeric_features`, `bootstrap_ci`, `learning_curve` (task 2); `propagate` (task 3) | `propagate` TODO |
 | `plots.py` | the figures of `python -m detkit weight features` (matplotlib) | works |
 | `config.py` | `load_config`/`save_config` (`<workdir>/weight_config.json`) | works |

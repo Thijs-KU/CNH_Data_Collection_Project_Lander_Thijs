@@ -293,6 +293,21 @@ def test_run_inference_and_save_samples_roundtrip(wd, tmp_path, monkeypatch):
     assert meta["crop"] == "wheat" and (wd.photos_dir / "small.png").exists()
 
 
+def test_save_constants_keeps_spread_only_for_unchanged_values(wd):
+    cfg = W.load_config(wd.workdir)
+    cfg["constants"].update({"wheat": 0.04, "sunflower": 0.05})
+    cfg["spreads"] = {"constants": {"wheat": {"sd": 0.004, "n": 5, "photos": 5},
+                                    "sunflower": {"sd": 0.005, "n": 5, "photos": 5}}}
+    W.save_config(wd.workdir, cfg)
+    I.save_constants(wd, [["wheat", 0.04, None], ["sunflower", 0.07, None]])      # wheat unchanged, sunflower edited
+    cfg = W.load_config(wd.workdir)
+    assert list(cfg["spreads"]["constants"]) == ["wheat"] and cfg["constants"]["sunflower"] == 0.07
+    m = I.load_weight_model(wd.workdir, "count_x_constant", cfg)
+    assert m.predict({"count": 10}, "wheat").low_g is not None
+    e = m.predict({"count": 10}, "sunflower")
+    assert e.low_g is None and "no bounds" in e.note
+
+
 def test_save_constants(wd):
     assert "Saved" in I.save_constants(wd, [["sunflower", 0.07, 2e-6], ["default", "", None]])
     cfg = W.load_config(wd.workdir)
@@ -420,6 +435,75 @@ def test_unsaved_edits_survive_refresh(wd):
     out3 = _ui(wd)[1]["start"](None)                               # opening a photo does not create a draft
     assert "Restored" not in out3[4]
     assert json.loads((wd.workdir / ".app_cache" / "drafts.json").read_text()) == {}
+
+
+def test_inference_shows_kernel_area_and_green_kernel_overlay(wd, tmp_path, monkeypatch):
+    import cv2
+    import numpy as np
+    _fake_propose(monkeypatch, n=1)                                       # box [10,10,50,60]
+    img = np.full((120, 200, 3), (235, 235, 240), np.uint8)               # paper with one yellow disc in the box
+    cv2.circle(img, (30, 35), 12, (40, 160, 230), -1)
+    cv2.imwrite(str(wd.photos_dir / "disc.png"), img)
+    kw = dict(ckpt="ck", device="cpu", score=0.3, tile=800, overlap=0.2, max_side=0, roi_text="",
+              model_name="count_x_constant", normalize=None)
+    rows, _its, ovs = I.run_inference([wd.photos_dir / "disc.png"], {}, wd, cache=tmp_path / "c", **kw)
+    assert "kernel_area_px" in I.RESULT_COLUMNS
+    assert rows[0]["kernel_area_px"] == pytest.approx(np.pi * 12 ** 2, rel=0.1)       # the disc, not the 40x50 box
+    assert rows[0]["total_area_px"] == 40 * 50 and rows[0]["kernel_area_px"] < rows[0]["total_area_px"]
+
+    def green_pixels(path):
+        a = np.asarray(Image.open(path).convert("RGB")).astype(int)
+        return int(((a[..., 1] > 150) & (a[..., 0] < 140) & (a[..., 2] < 140)).sum())
+    _r, _i, plain = I.run_inference([wd.photos_dir / "disc.png"], {}, wd, cache=tmp_path / "c2", **kw)
+    _r, _i, tinted = I.run_inference([wd.photos_dir / "disc.png"], {}, wd, cache=tmp_path / "c3",
+                                     kernel_overlay=True, **kw)
+    assert green_pixels(tinted[0]) > green_pixels(plain[0]) + 200                    # the kernel is tinted green
+
+
+def test_inference_warps_uploads_with_clicked_corners(wd, tmp_path, monkeypatch):
+    from PIL import ImageDraw
+    from detkit.app import corners as K
+    from detkit.preprocess import CANVAS_SIZE, brightness
+    _fake_propose(monkeypatch, n=2)
+    up = tmp_path / "up"
+    up.mkdir()
+    sheet = [[100, 50], [700, 80], [680, 560], [120, 540]]              # a bright "A4 sheet" on a dark table
+    im = Image.new("RGB", (800, 600), (20, 20, 20))
+    ImageDraw.Draw(im).polygon([tuple(q) for q in sheet], fill=(235, 235, 235))
+    im.save(up / "new.png")
+    im.save(up / "other.png")
+    corners = {"new.png": sheet, "small.png": sheet}                    # small.png is a project photo: ignored
+    views: list = []
+    kw = dict(ckpt="ck", device="cpu", score=0.3, tile=800, overlap=0.2, max_side=0, roi_text="",
+              model_name="count_x_constant")
+    rows, items, _ = I.run_inference([up / "new.png", up / "other.png", wd.photos_dir / "small.png"], {}, wd,
+                                     cache=tmp_path / "cache", normalize=None, views=views, corners=corners, **kw)
+    assert Image.open(items[0]["path"]).size == CANVAS_SIZE and K.is_warped(items[0]["warp"])
+    assert brightness(Image.open(items[0]["path"])) > 200               # only the sheet is left in the frame
+    assert items[1]["warp"] is None and Image.open(items[1]["path"]).size == (800, 600)    # no corners: as uploaded
+    assert items[2]["warp"] is None and Path(items[2]["path"]) == wd.photos_dir / "small.png"
+    assert len(views) == 1 and "new.png" in views[0][1] and "warped" in views[0][1]
+    names = I.save_samples(wd, items[:2])
+    assert names == ["new.png", "other.png"]
+    rec = K.load_warps(wd)["new.png"]                                   # raw upload kept, warp recorded
+    assert K.is_warped(rec) and "normalize" not in rec
+    assert Image.open(wd.workdir / "photos_original" / rec["source"]).size == (800, 600)
+    assert "other.png" not in K.load_warps(wd)
+    sizes = {i["file_name"]: (i["width"], i["height"]) for i in wd.store().load_coco()["images"]}
+    assert sizes["new.png"] == CANVAS_SIZE and sizes["other.png"] == (800, 600)
+    assert K.rows(wd)[[r[0] for r in K.rows(wd)].index("new.png")][1] == "warped"
+    # warp first, then brightness: both are recorded, the photo keeps the canvas size
+    views2: list = []
+    up2 = tmp_path / "up2"
+    up2.mkdir()
+    im.save(up2 / "both.png")
+    _r, its2, _o = I.run_inference([up2 / "both.png"], {}, wd, cache=tmp_path / "c2", normalize=(220, 1.0),
+                                   views=views2, corners={"both.png": sheet}, **kw)
+    assert Image.open(its2[0]["path"]).size == CANVAS_SIZE and its2[0]["norm"] and its2[0]["warp"]
+    assert "warped" in views2[0][1] and "brightness" in views2[0][1]
+    I.save_samples(wd, its2)
+    rec2 = K.load_warps(wd)["both.png"]
+    assert K.is_warped(rec2) and rec2["normalize"]["target"] == 220
 
 
 def test_inference_normalizes_uploads_not_project_photos(wd, tmp_path, monkeypatch):
